@@ -1,15 +1,21 @@
 /*
  * FakePlayers - Core/FakePlayerMgr.cs
  *
- * Le "chef d'orchestre" des faux joueurs : c'est ici qu'on les crée, qu'on les retrouve et qu'on les supprime.
+ * Le "chef d'orchestre" des alts : c'est ici qu'on les appelle, qu'on les retrouve et qu'on les supprime.
  * Toutes les autres classes passent par lui (la commande /fake n'appelle que FakePlayerMgr).
  *
- * Création d'un faux joueur, étape par étape (méthode Spawn) :
- *   1. vérifier le nom ;
- *   2. fabriquer en mémoire un personnage (DOLCharacters) et un compte (Account), copiés sur le créateur ;
+ * Un "alt" est un personnage déjà créé sur le compte du joueur, chargé depuis la base de données
+ * et piloté par le serveur. Il est FIGÉ : rien n'est jamais sauvegardé (voir FakeGamePlayer).
+ *
+ * Appel d'un alt, étape par étape (méthode Call) :
+ *   1. vérifier les règles (son compte, son royaume, pas déjà en jeu, place dans le groupe) ;
+ *   2. charger le personnage depuis la base et le placer, en mémoire seulement, à côté du joueur ;
  *   3. fabriquer un faux client réseau (FakeGameClient) et lui donner un numéro de session ;
- *   4. fabriquer le faux joueur (FakeGamePlayer) et l'ajouter au monde ;
- *   5. démarrer l'envoi de sa position (FakePositionSender) et l'ajouter à la liste.
+ *   4. fabriquer le faux joueur (FakeGamePlayer) : le serveur charge alors tout seul son équipement,
+ *      ses spécialisations, ses sorts... puis l'ajouter au monde ;
+ *   5. démarrer l'envoi de sa position (FakePositionSender) et le grouper avec le joueur.
+ *
+ * Les suppressions automatiques (disband, déconnexion) sont déclenchées par Events/FakeGroupWatcher.
  */
 
 using System;
@@ -22,25 +28,16 @@ using log4net;
 namespace DOL.GS.Scripts.FakePlayers
 {
 	/// <summary>
-	/// Création, liste et suppression des faux joueurs.
-	/// Les faux joueurs restent en jeu même quand leur créateur se déconnecte :
-	/// seule la commande /fake remove les supprime.
-	/// TEMPORAIRE (tests) : une seule liste pour tout le serveur, n'importe quel joueur peut tout lister/supprimer.
+	/// Appel, liste et suppression des alts.
 	/// </summary>
 	public static class FakePlayerMgr
 	{
 		/// <summary>Journal du serveur (console + fichier de log) pour écrire les erreurs.</summary>
 		private static readonly ILog log = LogManager.GetLogger(MethodBase.GetCurrentMethod().DeclaringType);
 
-		/// <summary>Longueur minimale d'un nom de faux joueur.</summary>
-		public const int NAME_MIN = 3;
-
-		/// <summary>Longueur maximale d'un nom de faux joueur.</summary>
-		public const int NAME_MAX = 20;
-
 		/// <summary>
-		/// Tous les faux joueurs du serveur.
-		/// Toujours y accéder sous verrou (_lock) : la commande et les timers du serveur
+		/// Tous les alts en jeu sur le serveur.
+		/// Toujours y accéder sous verrou (_lock) : la commande, les événements et les timers du serveur
 		/// peuvent tourner en même temps sur des threads différents.
 		/// </summary>
 		private static readonly List<FakeGamePlayer> _fakes = new();
@@ -48,55 +45,63 @@ namespace DOL.GS.Scripts.FakePlayers
 		/// <summary>Verrou qui protège la liste _fakes.</summary>
 		private static readonly object _lock = new();
 
-		// ================================================================= création
+		// ================================================================= appel
 
 		/// <summary>
-		/// Crée un faux joueur à côté du propriétaire, avec son apparence et ses caractéristiques.
+		/// Appelle un personnage du compte du joueur, à côté de lui, et le groupe avec lui.
 		/// </summary>
-		/// <param name="owner">Le vrai joueur qui crée le faux joueur (sert de modèle et de position).</param>
-		/// <param name="name">Le nom voulu (il sera mis en forme : "bOB" devient "Bob").</param>
+		/// <param name="owner">Le vrai joueur qui appelle son alt.</param>
+		/// <param name="charName">Le nom du personnage à appeler (majuscules/minuscules ignorées).</param>
 		/// <param name="error">En cas d'échec : la raison, en clair, à afficher au joueur. Sinon null.</param>
-		/// <returns>Le faux joueur créé, ou null en cas d'échec.</returns>
-		public static FakeGamePlayer Spawn(GamePlayer owner, string name, out string error)
+		/// <returns>L'alt en jeu, ou null en cas d'échec.</returns>
+		public static FakeGamePlayer Call(GamePlayer owner, string charName, out string error)
 		{
 			// --- 1. Vérifications
-			if (owner == null || owner.Client == null)
+			if (owner == null || owner.Client?.Account == null)
 			{
 				error = "joueur introuvable";
 				return null;
 			}
-			if (!IsValidName(name, out error))
-				return null;
-
-			name = FormatName(name);
-			if (FindByName(name) != null || WorldMgr.GetClientByPlayerName(name, true, false) != null)
+			if (string.IsNullOrWhiteSpace(charName))
 			{
-				error = "le nom " + name + " est déjà utilisé par un joueur en jeu";
+				error = "il faut donner le nom d'un de vos personnages";
 				return null;
 			}
+			if (!CheckGroupRoom(owner, out error))
+				return null;
 
-			// --- 2 et 3. Personnage, compte et faux client, uniquement en mémoire (rien en base)
-			DOLCharacters dbChar = BuildCharacter(owner, name);
+			DOLCharacters dbChar = LoadCharacter(owner, charName, out error);
+			if (dbChar == null)
+				return null;
+
+			// --- 2. Position : à côté du joueur. Modifié en mémoire seulement (l'alt n'est jamais sauvegardé).
+			dbChar.Region = owner.CurrentRegionID;
+			dbChar.Xpos = owner.Position.X;
+			dbChar.Ypos = owner.Position.Y;
+			dbChar.Zpos = owner.Position.Z;
+			dbChar.Direction = owner.Position.Orientation.InHeading;
+
+			// --- 3. Faux client, avec un compte fictif en mémoire.
+			// On n'utilise PAS le vrai compte : sinon le serveur pourrait croire ce compte connecté deux fois.
 			var client = new FakeGameClient(BuildAccount(owner, dbChar));
-
-			// Numéro de session : nécessaire pour que le serveur traite le faux client comme un vrai.
 			if (WorldMgr.CreateSessionID(client) < 0)
 			{
 				error = "le serveur est plein (plus de numéro de session libre)";
 				return null;
 			}
 
-			// --- 4. Le faux joueur lui-même, ajouté au monde
+			// --- 4. L'alt lui-même, ajouté au monde.
 			FakeGamePlayer fake;
 			try
 			{
+				// Le constructeur de GamePlayer charge tout depuis la base : inventaire, specs, sorts, artisanat...
 				fake = new FakeGamePlayer(client, dbChar) { Owner = owner };
 				client.Player = fake;
 				client.ClientState = GameClient.eClientState.Playing; // le serveur le considère "en jeu"
 
 				if (!fake.AddToWorld())
 				{
-					error = "impossible d'ajouter le joueur au monde ici";
+					error = "impossible d'ajouter " + dbChar.Name + " au monde ici";
 					ReleaseClient(client);
 					return null;
 				}
@@ -104,16 +109,23 @@ namespace DOL.GS.Scripts.FakePlayers
 			catch (Exception ex)
 			{
 				// La trace complète part dans la console du serveur, le joueur reçoit un message court.
-				log.Error("[FakePlayers] erreur à la création de " + name, ex);
-				error = "erreur à la création : " + ex.Message;
+				log.Error("[FakePlayers] erreur à l'appel de " + dbChar.Name, ex);
+				error = "erreur à l'appel : " + ex.Message;
 				ReleaseClient(client);
 				return null;
 			}
 
-			// --- 5. Démarré seulement maintenant : le faux joueur est dans le monde, sa région est connue.
+			// --- 5. Démarré seulement maintenant : l'alt est dans le monde, sa région est connue.
 			FakePositionSender.Start(fake);
 			lock (_lock)
 				_fakes.Add(fake);
+
+			if (!JoinOwnerGroup(owner, fake))
+			{
+				Remove(fake);
+				error = "impossible de grouper " + fake.Name + " (groupe plein ?)";
+				return null;
+			}
 
 			error = null;
 			return fake;
@@ -122,9 +134,9 @@ namespace DOL.GS.Scripts.FakePlayers
 		// ================================================================= recherche
 
 		/// <summary>
-		/// Liste de tous les faux joueurs encore en jeu.
-		/// Retourne une copie : on peut la parcourir (et supprimer des faux joueurs pendant le parcours)
-		/// sans risque. Les faux joueurs disparus entre-temps sont retirés au passage.
+		/// Liste de tous les alts encore en jeu.
+		/// Retourne une copie : on peut la parcourir (et supprimer des alts pendant le parcours) sans risque.
+		/// Les alts disparus entre-temps sont retirés au passage.
 		/// </summary>
 		public static List<FakeGamePlayer> GetFakes()
 		{
@@ -135,8 +147,14 @@ namespace DOL.GS.Scripts.FakePlayers
 			}
 		}
 
-		/// <summary>Cherche un faux joueur par son nom (majuscules/minuscules ignorées).</summary>
-		/// <returns>Le faux joueur trouvé, ou null.</returns>
+		/// <summary>Les alts en jeu appelés par ce joueur.</summary>
+		public static List<FakeGamePlayer> GetFakesOf(GamePlayer owner)
+		{
+			return GetFakes().Where(f => f.Owner == owner).ToList();
+		}
+
+		/// <summary>Cherche un alt en jeu par son nom (majuscules/minuscules ignorées).</summary>
+		/// <returns>L'alt trouvé, ou null.</returns>
 		public static FakeGamePlayer FindByName(string name)
 		{
 			if (string.IsNullOrWhiteSpace(name))
@@ -147,7 +165,9 @@ namespace DOL.GS.Scripts.FakePlayers
 		// ================================================================= suppression
 
 		/// <summary>
-		/// Supprime un faux joueur : le sort de son groupe, le retire du monde, libère son numéro de session.
+		/// Supprime un alt : le sort de son groupe, le retire du monde, libère son numéro de session.
+		/// Sans effet (et sans erreur) s'il a déjà été supprimé : les événements de groupe peuvent
+		/// demander plusieurs fois la même suppression.
 		/// </summary>
 		/// <returns>false s'il y a eu une erreur (détail dans la console du serveur).</returns>
 		public static bool Remove(FakeGamePlayer fake)
@@ -156,7 +176,10 @@ namespace DOL.GS.Scripts.FakePlayers
 				return false;
 
 			lock (_lock)
-				_fakes.Remove(fake);
+			{
+				if (!_fakes.Remove(fake))
+					return true; // déjà supprimé
+			}
 
 			try
 			{
@@ -167,7 +190,7 @@ namespace DOL.GS.Scripts.FakePlayers
 				fake.Group?.RemoveMember(fake);
 
 				if (fake.ObjectState != GameObject.eObjectState.Deleted)
-					fake.Delete(); // retire du monde : les vrais joueurs voient le faux joueur disparaître
+					fake.Delete(); // retire du monde : les vrais joueurs voient l'alt disparaître
 
 				// Rend le numéro de session au serveur (il pourra resservir).
 				WorldMgr.RemoveClient(fake.Client);
@@ -180,12 +203,39 @@ namespace DOL.GS.Scripts.FakePlayers
 			}
 		}
 
-		/// <summary>Supprime tous les faux joueurs du serveur.</summary>
-		/// <returns>Le nombre de faux joueurs supprimés sans erreur.</returns>
+		/// <summary>Supprime tous les alts du serveur.</summary>
+		/// <returns>Le nombre d'alts supprimés sans erreur.</returns>
 		public static int RemoveAll()
 		{
+			return RemoveList(GetFakes());
+		}
+
+		/// <summary>Supprime tous les alts appelés par ce joueur.</summary>
+		/// <returns>Le nombre d'alts supprimés sans erreur.</returns>
+		public static int RemoveAllOf(GamePlayer owner)
+		{
+			return RemoveList(GetFakesOf(owner));
+		}
+
+		/// <summary>
+		/// Supprime un alt un tout petit peu plus tard (au prochain tic de sa région).
+		/// Utilisé par les événements de groupe : on laisse le serveur finir de mettre à jour le groupe
+		/// avant de le modifier à nouveau, pour éviter les erreurs du type "Sequence contains no elements".
+		/// </summary>
+		public static void RemoveLater(FakeGamePlayer fake)
+		{
+			if (fake == null || fake.ObjectState == GameObject.eObjectState.Deleted)
+				return;
+			new RegionTimer(fake, t => { Remove(fake); return 0; }).Start(1);
+		}
+
+		// ================================================================= outils internes
+
+		/// <summary>Supprime une liste d'alts et compte les réussites.</summary>
+		private static int RemoveList(List<FakeGamePlayer> fakes)
+		{
 			int count = 0;
-			foreach (FakeGamePlayer fake in GetFakes()) // GetFakes renvoie une copie : on peut supprimer pendant la boucle
+			foreach (FakeGamePlayer fake in fakes)
 			{
 				if (Remove(fake))
 					count++;
@@ -193,9 +243,82 @@ namespace DOL.GS.Scripts.FakePlayers
 			return count;
 		}
 
-		// ================================================================= outils internes
+		/// <summary>
+		/// Charge un personnage depuis la base et vérifie les règles :
+		/// il appartient au compte du joueur, est de son royaume, n'est pas le personnage joué
+		/// et n'est pas déjà en jeu (comme alt ou comme vrai joueur).
+		/// </summary>
+		/// <param name="error">La raison du refus, ou null.</param>
+		/// <returns>Le personnage, ou null en cas de refus.</returns>
+		private static DOLCharacters LoadCharacter(GamePlayer owner, string charName, out string error)
+		{
+			DOLCharacters dbChar = DOLDB<DOLCharacters>.SelectObject(DB.Column(nameof(DOLCharacters.Name)).IsEqualTo(charName));
 
-		/// <summary>Libère le numéro de session d'un faux client dont la création a échoué.</summary>
+			// Même message que le personnage n'existe pas ou qu'il soit sur un autre compte :
+			// on ne révèle pas les personnages des autres joueurs.
+			if (dbChar == null || !string.Equals(dbChar.AccountName, owner.Client.Account.Name, StringComparison.OrdinalIgnoreCase))
+			{
+				error = "aucun personnage \"" + charName + "\" sur votre compte";
+				return null;
+			}
+			if (string.Equals(dbChar.Name, owner.Name, StringComparison.OrdinalIgnoreCase))
+			{
+				error = "c'est le personnage avec lequel vous jouez";
+				return null;
+			}
+			if (dbChar.Realm != (int)owner.Realm)
+			{
+				error = dbChar.Name + " n'est pas de votre royaume";
+				return null;
+			}
+			if (FindByName(dbChar.Name) != null || WorldMgr.GetClientByPlayerName(dbChar.Name, true, false) != null)
+			{
+				error = dbChar.Name + " est déjà en jeu";
+				return null;
+			}
+
+			error = null;
+			return dbChar;
+		}
+
+		/// <summary>
+		/// Vérifie qu'il y a de la place pour un alt dans le groupe du joueur :
+		/// pas de groupe (il sera créé), ou un groupe dont il est le chef et qui n'est pas plein.
+		/// </summary>
+		private static bool CheckGroupRoom(GamePlayer owner, out string error)
+		{
+			Group group = owner.Group;
+			if (group != null && group.Leader != owner)
+			{
+				error = "vous devez être chef de votre groupe";
+				return false;
+			}
+			if (group != null && group.MemberCount >= ServerProperties.Properties.GROUP_MAX_MEMBER)
+			{
+				error = "votre groupe est plein";
+				return false;
+			}
+			error = null;
+			return true;
+		}
+
+		/// <summary>
+		/// Ajoute l'alt au groupe du joueur. Si le joueur n'a pas de groupe, il est créé avec lui comme chef
+		/// (même ordre que le serveur quand un joueur accepte une invitation).
+		/// </summary>
+		/// <returns>false si l'alt n'a pas pu être ajouté (groupe plein).</returns>
+		private static bool JoinOwnerGroup(GamePlayer owner, FakeGamePlayer fake)
+		{
+			if (owner.Group == null)
+			{
+				var group = new Group(owner);
+				GroupMgr.AddGroup(group);
+				group.AddMember(owner);
+			}
+			return owner.Group.AddMember(fake);
+		}
+
+		/// <summary>Libère le numéro de session d'un faux client dont l'appel a échoué.</summary>
 		private static void ReleaseClient(FakeGameClient client)
 		{
 			WorldMgr.RemoveClient(client);
@@ -203,86 +326,14 @@ namespace DOL.GS.Scripts.FakePlayers
 		}
 
 		/// <summary>
-		/// Vérifie un nom : lettres uniquement, entre NAME_MIN et NAME_MAX caractères,
-		/// et pas "all" (réservé à /fake remove all).
-		/// </summary>
-		/// <param name="error">La raison du refus, ou null si le nom est valide.</param>
-		/// <returns>true si le nom est accepté.</returns>
-		private static bool IsValidName(string name, out string error)
-		{
-			if (string.IsNullOrWhiteSpace(name))
-			{
-				error = "il faut donner un nom";
-				return false;
-			}
-			if (name.Length < NAME_MIN || name.Length > NAME_MAX)
-			{
-				error = "le nom doit faire entre " + NAME_MIN + " et " + NAME_MAX + " lettres";
-				return false;
-			}
-			if (!name.All(char.IsLetter))
-			{
-				error = "le nom ne doit contenir que des lettres";
-				return false;
-			}
-			if (name.Equals("all", StringComparison.OrdinalIgnoreCase))
-			{
-				error = "le nom \"all\" est réservé à /fake remove all";
-				return false;
-			}
-			error = null;
-			return true;
-		}
-
-		/// <summary>Met la première lettre en majuscule et le reste en minuscules : "bOB" devient "Bob".</summary>
-		private static string FormatName(string name)
-		{
-			return char.ToUpperInvariant(name[0]) + name.Substring(1).ToLowerInvariant();
-		}
-
-		/// <summary>
-		/// Fabrique le personnage du faux joueur, uniquement en mémoire (jamais écrit en base).
-		/// Tout est copié sur le propriétaire : royaume, race, classe, niveau, apparence, caractéristiques,
-		/// et position (le faux joueur apparaît là où se trouve le propriétaire).
-		/// </summary>
-		private static DOLCharacters BuildCharacter(GamePlayer owner, string name)
-		{
-			return new DOLCharacters
-			{
-				Name = name,
-				AccountName = "fake_" + name.ToLowerInvariant(),
-				Realm = (int)owner.Realm,
-				Race = owner.Race,
-				Gender = (int)owner.Gender,
-				Class = owner.CharacterClass.ID,
-				Level = owner.Level,
-				CreationModel = owner.Model,
-				CurrentModel = owner.Model,
-				Strength = owner.Strength,
-				Constitution = owner.Constitution,
-				Dexterity = owner.Dexterity,
-				Quickness = owner.Quickness,
-				Intelligence = owner.Intelligence,
-				Piety = owner.Piety,
-				Empathy = owner.Empathy,
-				Charisma = owner.Charisma,
-				Region = owner.CurrentRegionID,
-				Xpos = owner.Position.X,
-				Ypos = owner.Position.Y,
-				Zpos = owner.Position.Z,
-				Direction = owner.Position.Orientation.InHeading,
-			};
-		}
-
-		/// <summary>
-		/// Fabrique le compte du faux joueur, uniquement en mémoire.
+		/// Fabrique le compte fictif du faux client, uniquement en mémoire.
 		/// Niveau de droits "joueur" et même langue que le propriétaire.
 		/// </summary>
 		private static Account BuildAccount(GamePlayer owner, DOLCharacters dbChar)
 		{
 			return new Account
 			{
-				Name = dbChar.AccountName,
+				Name = "fake_" + dbChar.Name.ToLowerInvariant(),
 				PrivLevel = (int)ePrivLevel.Player,
 				Language = owner.Client.Account.Language,
 				Characters = [dbChar],
