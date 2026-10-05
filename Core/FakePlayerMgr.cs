@@ -13,7 +13,8 @@
  *   3. fabriquer un faux client réseau (FakeGameClient) et lui donner un numéro de session ;
  *   4. fabriquer le faux joueur (FakeGamePlayer) : le serveur charge alors tout seul son équipement,
  *      ses spécialisations, ses sorts... puis l'ajouter au monde ;
- *   5. démarrer l'envoi de sa position (FakePositionSender) et le grouper avec le joueur.
+ *   5. démarrer l'envoi de sa position (FakePositionSender) et le suivi (FakeFollowAction),
+ *      puis le grouper avec le joueur.
  *
  * Les suppressions automatiques (disband, déconnexion) sont déclenchées par Events/FakeGroupWatcher.
  */
@@ -23,6 +24,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using DOL.Database;
+using DOL.GS.PacketHandler;
 using log4net;
 
 namespace DOL.GS.Scripts.FakePlayers
@@ -117,6 +119,7 @@ namespace DOL.GS.Scripts.FakePlayers
 
 			// --- 5. Démarré seulement maintenant : l'alt est dans le monde, sa région est connue.
 			FakePositionSender.Start(fake);
+			FakeFollowAction.Start(fake);
 			lock (_lock)
 				_fakes.Add(fake);
 
@@ -227,6 +230,29 @@ namespace DOL.GS.Scripts.FakePlayers
 			if (fake == null || fake.ObjectState == GameObject.eObjectState.Deleted)
 				return;
 			new RegionTimer(fake, t => { Remove(fake); return 0; }).Start(1);
+		}
+
+		/// <summary>
+		/// Supprime puis rappelle un alt à côté de son propriétaire.
+		/// Utilisé quand le propriétaire change de région : un faux client ne peut pas faire
+		/// le changement de région d'un vrai joueur (le serveur attend une confirmation du jeu).
+		/// L'alt étant figé et rechargé depuis la base, il ne perd rien. Son ordre (stay/follow) est gardé.
+		/// </summary>
+		public static void Recall(FakeGamePlayer fake)
+		{
+			GamePlayer owner = fake.Owner;
+			string name = fake.Name;
+			bool following = fake.IsFollowing;
+
+			Remove(fake);
+			if (owner == null)
+				return;
+
+			FakeGamePlayer again = Call(owner, name, out string error);
+			if (again == null)
+				owner.Out.SendMessage(name + " n'a pas pu vous suivre : " + error + ".", eChatType.CT_System, eChatLoc.CL_SystemWindow);
+			else
+				again.IsFollowing = following;
 		}
 
 		// ================================================================= outils internes

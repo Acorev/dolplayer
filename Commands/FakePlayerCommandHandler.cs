@@ -24,12 +24,16 @@ namespace DOL.GS.Scripts.FakePlayers
 		"/fake list - liste les alts en jeu",
 		"/fake remove - supprime l'alt sélectionné (sans sélection : tous)",
 		"/fake remove <nom> - supprime un alt",
-		"/fake remove all - supprime tous les alts")]
+		"/fake remove all - supprime tous les alts",
+		"/fake stay [nom] - l'alt ciblé (ou nommé, sans cible : tous les vôtres) reste sur place",
+		"/fake follow [nom] - l'alt ciblé (ou nommé, sans cible : tous les vôtres) vous suit à nouveau",
+		"/fake nav - teste le navmesh à votre position (et le chemin vers votre cible)")]
 	public class FakePlayerCommandHandler : AbstractCommandHandler, ICommandHandler
 	{
 		/// <summary>
 		/// Appelée par le serveur à chaque /fake.
-		/// args[0] = "&amp;fake", args[1] = la sous-commande (call, list, remove), args[2] = le paramètre éventuel.
+		/// args[0] = "&amp;fake", args[1] = la sous-commande (call, list, remove, stay, follow, nav),
+		/// args[2] = le paramètre éventuel.
 		/// </summary>
 		public void OnCommand(GameClient client, string[] args)
 		{
@@ -54,6 +58,17 @@ namespace DOL.GS.Scripts.FakePlayers
 					break;
 				case "remove":
 					Remove(client, player, args);
+					break;
+				case "stay":
+					SetFollow(client, player, args, false);
+					break;
+				case "follow":
+					SetFollow(client, player, args, true);
+					break;
+				case "nav":
+					// Diagnostic du navmesh (voir Movement/FakeNavCheck).
+					foreach (string line in FakeNavCheck.Check(player))
+						DisplayMessage(client, line);
 					break;
 				default:
 					DisplaySyntax(client); // sous-commande inconnue : on affiche l'aide
@@ -155,6 +170,54 @@ namespace DOL.GS.Scripts.FakePlayers
 				DisplayMessage(client, "{0} est reparti.", name);
 			else
 				DisplayMessage(client, "Erreur à la suppression de {0} (voir la console du serveur).", name);
+		}
+
+		/// <summary>
+		/// /fake stay [nom] et /fake follow [nom] : change l'ordre de déplacement.
+		///  - avec un nom : cet alt ;
+		///  - sans nom : l'alt ciblé, ou tous vos alts s'il n'y a aucune cible.
+		///    Une cible qui n'est pas un alt ne change rien.
+		/// </summary>
+		/// <param name="follow">true = suivre (/fake follow), false = rester (/fake stay).</param>
+		private void SetFollow(GameClient client, GamePlayer player, string[] args, bool follow)
+		{
+			var fakes = new List<FakeGamePlayer>();
+
+			if (args.Length >= 3)
+			{
+				FakeGamePlayer named = FakePlayerMgr.FindByName(args[2]);
+				if (named == null)
+				{
+					DisplayMessage(client, "Aucun alt nommé {0} en jeu. Voir /fake list.", args[2]);
+					return;
+				}
+				fakes.Add(named);
+			}
+			else if (player.TargetObject != null)
+			{
+				if (player.TargetObject is not FakeGamePlayer targeted)
+				{
+					DisplayMessage(client, "{0} n'est pas un alt.", player.TargetObject.Name);
+					return;
+				}
+				fakes.Add(targeted);
+			}
+			else
+			{
+				fakes = FakePlayerMgr.GetFakesOf(player);
+			}
+
+			if (fakes.Count == 0)
+			{
+				DisplayMessage(client, "Vous n'avez aucun alt en jeu.");
+				return;
+			}
+
+			foreach (FakeGamePlayer fake in fakes)
+				fake.IsFollowing = follow;
+
+			string names = string.Join(", ", fakes.ConvertAll(f => f.Name));
+			DisplayMessage(client, follow ? "{0} : vous suit." : "{0} : reste sur place.", names);
 		}
 
 		/// <summary>Supprime tous les alts et affiche le nombre supprimé.</summary>

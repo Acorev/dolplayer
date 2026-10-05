@@ -65,6 +65,16 @@ namespace DOL.GS.Scripts.FakePlayers
 		}
 
 		/// <summary>
+		/// Envoie tout de suite la position aux joueurs proches.
+		/// Appelé par Movement/FakeFollowAction à chaque pas, pour une animation fluide
+		/// (le timer de ce fichier, lui, ne passe que toutes les INTERVAL_MS).
+		/// </summary>
+		public static void SendNow(FakeGamePlayer fake)
+		{
+			SendToNearbyPlayers(fake);
+		}
+
+		/// <summary>
 		/// Depuis les clients 1.124+, SendPlayerForgedPosition ne fait plus rien. Un vrai joueur reste visible
 		/// parce que son client envoie sa position et que PlayerPositionUpdateHandler la relaie aux autres.
 		/// On reproduit ici ce paquet relayé (même format que outpak1124 / outpak1127 du handler).
@@ -125,7 +135,7 @@ namespace DOL.GS.Scripts.FakePlayers
 				pak.WriteFloatLowEndian(fake.Position.X);
 				pak.WriteFloatLowEndian(fake.Position.Y);
 				pak.WriteFloatLowEndian(fake.Position.Z);
-				pak.WriteFloatLowEndian(0); // vitesse
+				pak.WriteFloatLowEndian(fake.CurrentSpeed); // vitesse : le client anime la course si > 0
 				pak.WriteFloatLowEndian(0); // vitesse verticale
 				pak.WriteShort((ushort)fake.Client.SessionID);
 				if (is1127)
