@@ -1,10 +1,10 @@
 /*
- * FakePlayer - "faux client" réseau pour les faux joueurs.
+ * NullPacketLib - la "carte réseau" des faux joueurs.
  *
  * Implémente IPacketLib sans rien envoyer : chaque méthode ne fait rien et retourne la valeur par défaut.
- * Fichier à copier dans GameServerScripts avec FakePlayer.cs.
- * Généré à partir de GameServer/packets/Server/IPacketLib.cs (DOLSharp-master) : si votre IPacketLib
- * a d'autres méthodes, ajoutez-les ici sur le même modèle (une méthode vide).
+ * Utilisée par FakeGameClient (dossier Network).
+ * Générée à partir de GameServer/packets/Server/IPacketLib.cs (DOLSharp) : si une mise à jour de DOLSharp
+ * ajoute des méthodes à IPacketLib, la compilation échouera ici ; ajoutez-les sur le même modèle (méthode vide).
  */
 
 using System;
@@ -22,6 +22,13 @@ using DOL.GS.Quests;
 
 namespace DOL.GS.Scripts.FakePlayers
 {
+	/// <summary>
+	/// Bibliothèque de paquets "muette" du faux client.
+	/// Le serveur envoie tout ce qu'un joueur doit voir (messages, mises à jour, fenêtres...) en appelant
+	/// les méthodes de Client.Out. Pour un faux joueur, personne ne regarde : toutes ces méthodes
+	/// ne font donc rien (corps vide) et celles qui doivent renvoyer une valeur renvoient la valeur par défaut.
+	/// Ne contient aucune logique : inutile de la modifier, sauf si DOLSharp ajoute des méthodes à IPacketLib.
+	/// </summary>
 	public class NullPacketLib : IPacketLib
 	{
 		public int BowPrepare => default;
