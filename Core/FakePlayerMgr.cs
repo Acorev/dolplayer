@@ -23,6 +23,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 using DOL.Database;
 using DOL.GS.PacketHandler;
 using log4net;
@@ -233,7 +234,39 @@ namespace DOL.GS.Scripts.FakePlayers
 		}
 
 		/// <summary>
-		/// Supprime puis rappelle un alt à côté de son propriétaire.
+		/// Verrou du travail en arrière-plan : un seul appel/rappel à la fois (voir RunInBackground).
+		/// </summary>
+		private static readonly object _backgroundLock = new();
+
+		/// <summary>
+		/// Exécute un travail EN ARRIÈRE-PLAN (Task.Run), un seul à la fois.
+		///
+		/// Pourquoi en arrière-plan : appeler un alt le recharge depuis la base (inventaire, specs,
+		/// quêtes...), ce qui prend du temps. Sur le fil d'une région, ça figerait tous ses mobs ;
+		/// sur le fil des paquets du joueur, ça bloquerait ses commandes.
+		/// Pourquoi un à la fois : avec plusieurs alts, le groupe ne doit jamais se retrouver un instant
+		/// réduit au seul propriétaire (il serait dissous, et les alts déjà appelés supprimés).
+		/// </summary>
+		/// <param name="what">Description pour le log en cas d'erreur.</param>
+		/// <param name="work">Le travail à faire.</param>
+		public static void RunInBackground(string what, Action work)
+		{
+			Task.Run(() =>
+			{
+				try
+				{
+					lock (_backgroundLock)
+						work();
+				}
+				catch (Exception ex)
+				{
+					log.Error("[FakePlayers] erreur en arrière-plan (" + what + ")", ex);
+				}
+			});
+		}
+
+		/// <summary>
+		/// Supprime puis rappelle un alt à côté de son propriétaire, en arrière-plan.
 		/// Utilisé quand le propriétaire change de région : un faux client ne peut pas faire
 		/// le changement de région d'un vrai joueur (le serveur attend une confirmation du jeu).
 		/// L'alt étant figé et rechargé depuis la base, il ne perd rien. Son ordre (stay/follow) est gardé.
@@ -244,15 +277,19 @@ namespace DOL.GS.Scripts.FakePlayers
 			string name = fake.Name;
 			bool following = fake.IsFollowing;
 
-			Remove(fake);
-			if (owner == null)
-				return;
+			RunInBackground("rappel de " + name, () =>
+			{
+				// Suppression ET rappel ensemble, sous le même verrou (voir RunInBackground).
+				Remove(fake);
+				if (owner == null || owner.ObjectState != GameObject.eObjectState.Active)
+					return;
 
-			FakeGamePlayer again = Call(owner, name, out string error);
-			if (again == null)
-				owner.Out.SendMessage(name + " n'a pas pu vous suivre : " + error + ".", eChatType.CT_System, eChatLoc.CL_SystemWindow);
-			else
-				again.IsFollowing = following;
+				FakeGamePlayer again = Call(owner, name, out string error);
+				if (again == null)
+					owner.Out.SendMessage(name + " n'a pas pu vous suivre : " + error + ".", eChatType.CT_System, eChatLoc.CL_SystemWindow);
+				else
+					again.IsFollowing = following;
+			});
 		}
 
 		// ================================================================= outils internes
@@ -278,6 +315,35 @@ namespace DOL.GS.Scripts.FakePlayers
 		/// <returns>Le personnage, ou null en cas de refus.</returns>
 		private static DOLCharacters LoadCharacter(GamePlayer owner, string charName, out string error)
 		{
+			DOLCharacters dbChar = FindOwnCharacter(owner, charName, out error);
+			if (dbChar == null)
+				return null;
+
+			if (FindByName(dbChar.Name) != null || WorldMgr.GetClientByPlayerName(dbChar.Name, true, false) != null)
+			{
+				error = dbChar.Name + " est déjà en jeu";
+				return null;
+			}
+
+			error = null;
+			return dbChar;
+		}
+
+		/// <summary>
+		/// Cherche un personnage en base et vérifie qu'il peut servir d'alt à ce joueur :
+		/// il appartient à son compte, est de son royaume et n'est pas le personnage joué.
+		/// (Ne vérifie pas s'il est déjà en jeu : utilisé aussi pour composer l'équipe, voir FakeTeam.)
+		/// </summary>
+		/// <param name="error">La raison du refus, ou null.</param>
+		/// <returns>Le personnage, ou null en cas de refus.</returns>
+		public static DOLCharacters FindOwnCharacter(GamePlayer owner, string charName, out string error)
+		{
+			if (string.IsNullOrWhiteSpace(charName))
+			{
+				error = "il faut donner le nom d'un de vos personnages";
+				return null;
+			}
+
 			DOLCharacters dbChar = DOLDB<DOLCharacters>.SelectObject(DB.Column(nameof(DOLCharacters.Name)).IsEqualTo(charName));
 
 			// Même message que le personnage n'existe pas ou qu'il soit sur un autre compte :
@@ -295,11 +361,6 @@ namespace DOL.GS.Scripts.FakePlayers
 			if (dbChar.Realm != (int)owner.Realm)
 			{
 				error = dbChar.Name + " n'est pas de votre royaume";
-				return null;
-			}
-			if (FindByName(dbChar.Name) != null || WorldMgr.GetClientByPlayerName(dbChar.Name, true, false) != null)
-			{
-				error = dbChar.Name + " est déjà en jeu";
 				return null;
 			}
 

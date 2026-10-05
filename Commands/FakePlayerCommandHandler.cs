@@ -21,6 +21,10 @@ namespace DOL.GS.Scripts.FakePlayers
 		ePrivLevel.Player,
 		"Gère vos alts (personnages de votre compte joués par le serveur).",
 		"/fake call <personnage> - appelle un de vos personnages et le groupe avec vous",
+		"/fake team - appelle toute votre équipe",
+		"/fake team add <personnage> - ajoute un personnage à l'équipe de ce personnage-ci",
+		"/fake team remove <personnage> - retire un personnage de l'équipe",
+		"/fake team list - affiche l'équipe",
 		"/fake list - liste les alts en jeu",
 		"/fake remove - supprime l'alt sélectionné (sans sélection : tous)",
 		"/fake remove <nom> - supprime un alt",
@@ -32,7 +36,7 @@ namespace DOL.GS.Scripts.FakePlayers
 	{
 		/// <summary>
 		/// Appelée par le serveur à chaque /fake.
-		/// args[0] = "&amp;fake", args[1] = la sous-commande (call, list, remove, stay, follow, nav),
+		/// args[0] = "&amp;fake", args[1] = la sous-commande (call, team, list, remove, stay, follow, nav),
 		/// args[2] = le paramètre éventuel.
 		/// </summary>
 		public void OnCommand(GameClient client, string[] args)
@@ -52,6 +56,9 @@ namespace DOL.GS.Scripts.FakePlayers
 			{
 				case "call":
 					Call(client, player, args);
+					break;
+				case "team":
+					Team(client, player, args);
 					break;
 				case "list":
 					List(client);
@@ -78,6 +85,7 @@ namespace DOL.GS.Scripts.FakePlayers
 
 		/// <summary>
 		/// /fake call &lt;personnage&gt; : appelle un personnage du compte à côté du joueur et le groupe avec lui.
+		/// Fait en arrière-plan (chargement depuis la base), un appel à la fois : voir FakePlayerMgr.RunInBackground.
 		/// Affiche "arrive" (avec la classe et le niveau) ou la raison de l'échec.
 		/// </summary>
 		private void Call(GameClient client, GamePlayer player, string[] args)
@@ -88,12 +96,77 @@ namespace DOL.GS.Scripts.FakePlayers
 				return;
 			}
 
-			FakeGamePlayer fake = FakePlayerMgr.Call(player, args[2], out string error);
-			if (fake == null)
-				DisplayMessage(client, "Impossible d'appeler {0} : {1}.", args[2], error);
-			else
-				DisplayMessage(client, "{0} arrive : {1} niveau {2}.",
-					fake.Name, fake.CharacterClass.GetSalutation(fake.Gender), fake.Level);
+			string name = args[2];
+			FakePlayerMgr.RunInBackground("appel de " + name, () =>
+			{
+				FakeGamePlayer fake = FakePlayerMgr.Call(player, name, out string error);
+				if (fake == null)
+					DisplayMessage(client, "Impossible d'appeler {0} : {1}.", name, error);
+				else
+					DisplayMessage(client, "{0} arrive : {1} niveau {2}.",
+						fake.Name, fake.CharacterClass.GetSalutation(fake.Gender), fake.Level);
+			});
+		}
+
+		/// <summary>
+		/// /fake team [add|remove|list] : l'équipe de ce personnage (voir Core/FakeTeam).
+		///  - sans rien : appelle toute l'équipe ;
+		///  - add &lt;perso&gt; / remove &lt;perso&gt; : compose l'équipe ;
+		///  - list : affiche l'équipe dans l'ordre (= ordre de la file indienne).
+		/// </summary>
+		private void Team(GameClient client, GamePlayer player, string[] args)
+		{
+			string action = args.Length >= 3 ? args[2].ToLowerInvariant() : "";
+
+			switch (action)
+			{
+				case "":
+					if (!FakeTeam.CallAll(player))
+						DisplayMessage(client, "Votre équipe est vide. Ajoutez des personnages avec /fake team add <personnage>.");
+					else
+						DisplayMessage(client, "Votre équipe arrive...");
+					break;
+
+				case "add":
+					if (args.Length < 4)
+					{
+						DisplayMessage(client, "Usage : /fake team add <personnage>");
+						return;
+					}
+					if (FakeTeam.Add(player, args[3], out string added, out string addError))
+						DisplayMessage(client, "{0} ajouté à votre équipe ({1}/{2}).", added, FakeTeam.Get(player).Count, FakeTeam.MaxSize);
+					else
+						DisplayMessage(client, "Impossible d'ajouter {0} : {1}.", args[3], addError);
+					break;
+
+				case "remove":
+					if (args.Length < 4)
+					{
+						DisplayMessage(client, "Usage : /fake team remove <personnage>");
+						return;
+					}
+					if (FakeTeam.Remove(player, args[3], out string removed, out string removeError))
+						DisplayMessage(client, "{0} retiré de votre équipe.", removed);
+					else
+						DisplayMessage(client, "Impossible de retirer {0} : {1}.", args[3], removeError);
+					break;
+
+				case "list":
+					List<string> team = FakeTeam.Get(player);
+					if (team.Count == 0)
+					{
+						DisplayMessage(client, "Votre équipe est vide.");
+						return;
+					}
+					DisplayMessage(client, "Équipe de {0} ({1}/{2}) :", player.Name, team.Count, FakeTeam.MaxSize);
+					for (int i = 0; i < team.Count; i++)
+						DisplayMessage(client, "  {0}. {1}", i + 1, team[i]);
+					break;
+
+				default:
+					DisplayMessage(client, "Usage : /fake team [add <personnage> | remove <personnage> | list]");
+					break;
+			}
 		}
 
 		/// <summary>

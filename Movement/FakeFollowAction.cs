@@ -70,7 +70,7 @@ namespace DOL.GS.Scripts.FakePlayers
 		/// Hauteur de la surface du navmesh au-dessus du vrai sol, retirée à toutes les hauteurs
 		/// venant du navmesh. À ajuster si les alts flottent encore (augmenter) ou s'enfoncent (diminuer).
 		/// </summary>
-		public const int NAVMESH_Z_OFFSET = 12;
+		public const int NAVMESH_Z_OFFSET = 8;
 
 		/// <summary>Écart maximal entre deux points du chemin, pour suivre le relief.</summary>
 		public const int DENSIFY_STEP = 64;
@@ -122,8 +122,10 @@ namespace DOL.GS.Scripts.FakePlayers
 				// --- 1. Changement de région : supprimé puis rappelé à côté du propriétaire.
 				if (owner.CurrentRegionID != fake.CurrentRegionID)
 				{
+					// Le rappel se fait en arrière-plan (voir FakePlayerMgr.Recall) ;
+					// ce timer s'arrête, le nouvel alt aura le sien.
 					FakePlayerMgr.Recall(fake);
-					return 0; // cet alt n'existe plus ; le nouveau a son propre timer
+					return 0;
 				}
 
 				if (Update(fake, owner, state))
