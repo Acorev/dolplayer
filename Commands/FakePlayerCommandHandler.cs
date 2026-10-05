@@ -31,12 +31,16 @@ namespace DOL.GS.Scripts.FakePlayers
 		"/fake remove all - supprime tous les alts",
 		"/fake stay [nom] - l'alt ciblé (ou nommé, sans cible : tous les vôtres) reste sur place",
 		"/fake follow [nom] - l'alt ciblé (ou nommé, sans cible : tous les vôtres) vous suit à nouveau",
+		"/fake attack [nom] - vos alts de mêlée (ou l'alt nommé) attaquent votre cible, même s'ils combattent déjà",
+		"/fake passive [nom] - l'alt ciblé (ou nommé, sans cible : tous les vôtres) ne combat plus",
+		"/fake fight [nom] - l'alt ciblé (ou nommé, sans cible : tous les vôtres) combat à nouveau",
 		"/fake nav - teste le navmesh à votre position (et le chemin vers votre cible)")]
 	public class FakePlayerCommandHandler : AbstractCommandHandler, ICommandHandler
 	{
 		/// <summary>
 		/// Appelée par le serveur à chaque /fake.
-		/// args[0] = "&amp;fake", args[1] = la sous-commande (call, team, list, remove, stay, follow, nav),
+		/// args[0] = "&amp;fake", args[1] = la sous-commande (call, team, list, remove, stay, follow,
+		/// attack, passive, fight, nav),
 		/// args[2] = le paramètre éventuel.
 		/// </summary>
 		public void OnCommand(GameClient client, string[] args)
@@ -71,6 +75,15 @@ namespace DOL.GS.Scripts.FakePlayers
 					break;
 				case "follow":
 					SetFollow(client, player, args, true);
+					break;
+				case "attack":
+					Attack(client, player, args);
+					break;
+				case "passive":
+					SetPassive(client, player, args, true);
+					break;
+				case "fight":
+					SetPassive(client, player, args, false);
 					break;
 				case "nav":
 					// Diagnostic du navmesh (voir Movement/FakeNavCheck).
@@ -247,33 +260,66 @@ namespace DOL.GS.Scripts.FakePlayers
 
 		/// <summary>
 		/// /fake stay [nom] et /fake follow [nom] : change l'ordre de déplacement.
-		///  - avec un nom : cet alt ;
-		///  - sans nom : l'alt ciblé, ou tous vos alts s'il n'y a aucune cible.
-		///    Une cible qui n'est pas un alt ne change rien.
 		/// </summary>
 		/// <param name="follow">true = suivre (/fake follow), false = rester (/fake stay).</param>
 		private void SetFollow(GameClient client, GamePlayer player, string[] args, bool follow)
 		{
-			var fakes = new List<FakeGamePlayer>();
+			List<FakeGamePlayer> fakes = ResolveFakes(client, player, args);
+			if (fakes == null)
+				return;
 
+			foreach (FakeGamePlayer fake in fakes)
+				fake.IsFollowing = follow;
+
+			string names = string.Join(", ", fakes.ConvertAll(f => f.Name));
+			DisplayMessage(client, follow ? "{0} : vous suit." : "{0} : reste sur place.", names);
+		}
+
+		/// <summary>
+		/// /fake passive [nom] et /fake fight [nom] : désactive ou réactive le combat (voir Combat/FakeCombat).
+		/// </summary>
+		/// <param name="passive">true = aucun combat (/fake passive), false = combat (/fake fight).</param>
+		private void SetPassive(GameClient client, GamePlayer player, string[] args, bool passive)
+		{
+			List<FakeGamePlayer> fakes = ResolveFakes(client, player, args);
+			if (fakes == null)
+				return;
+
+			foreach (FakeGamePlayer fake in fakes)
+			{
+				fake.IsPassive = passive;
+				if (passive)
+					FakeCombat.EndFight(fake); // arrête tout de suite un combat en cours
+			}
+
+			string names = string.Join(", ", fakes.ConvertAll(f => f.Name));
+			DisplayMessage(client, passive ? "{0} : ne combat plus." : "{0} : combat à nouveau.", names);
+		}
+
+		/// <summary>
+		/// /fake attack [nom] : vos alts (ou l'alt nommé) attaquent VOTRE cible actuelle (voir Combat/FakeCombat).
+		/// L'ordre passe avant tout, même si l'alt combat déjà, et vaut aussi pour un alt en stay.
+		/// Ne sont pas concernés : les alts en mode sorts (palier 1) et les alts passifs.
+		/// Ici, la cible du joueur est l'ennemi : sans nom, ce sont donc TOUS ses alts qui obéissent.
+		/// </summary>
+		private void Attack(GameClient client, GamePlayer player, string[] args)
+		{
+			if (player.TargetObject is not GameLiving target)
+			{
+				DisplayMessage(client, "Vous n'avez pas de cible.");
+				return;
+			}
+
+			List<FakeGamePlayer> fakes;
 			if (args.Length >= 3)
 			{
 				FakeGamePlayer named = FakePlayerMgr.FindByName(args[2]);
-				if (named == null)
+				if (named == null || named.Owner != player)
 				{
-					DisplayMessage(client, "Aucun alt nommé {0} en jeu. Voir /fake list.", args[2]);
+					DisplayMessage(client, "Aucun de vos alts ne s'appelle {0}. Voir /fake list.", args[2]);
 					return;
 				}
-				fakes.Add(named);
-			}
-			else if (player.TargetObject != null)
-			{
-				if (player.TargetObject is not FakeGamePlayer targeted)
-				{
-					DisplayMessage(client, "{0} n'est pas un alt.", player.TargetObject.Name);
-					return;
-				}
-				fakes.Add(targeted);
+				fakes = new List<FakeGamePlayer> { named };
 			}
 			else
 			{
@@ -286,11 +332,70 @@ namespace DOL.GS.Scripts.FakePlayers
 				return;
 			}
 
+			var attacking = new List<string>();
+			var skipped = new List<string>();
 			foreach (FakeGamePlayer fake in fakes)
-				fake.IsFollowing = follow;
+			{
+				if (fake.IsPassive)
+					skipped.Add(fake.Name + " (passif)");
+				else if (fake.CombatMode != FakePlayerClass.MODE_MELEE)
+					skipped.Add(fake.Name + " (sorts)");
+				else if (!FakeCombat.IsValidTarget(fake, player, target))
+					skipped.Add(fake.Name + " (cible non attaquable ou trop loin)");
+				else
+				{
+					fake.OrderedTarget = target;
+					attacking.Add(fake.Name);
+				}
+			}
 
-			string names = string.Join(", ", fakes.ConvertAll(f => f.Name));
-			DisplayMessage(client, follow ? "{0} : vous suit." : "{0} : reste sur place.", names);
+			if (attacking.Count > 0)
+				DisplayMessage(client, "{0} : attaque {1}.", string.Join(", ", attacking), target.Name);
+			if (skipped.Count > 0)
+				DisplayMessage(client, "N'obéit pas : {0}.", string.Join(", ", skipped));
+		}
+
+		/// <summary>
+		/// Les alts visés par stay, follow, passive et fight :
+		///  - avec un nom (args[2]) : cet alt ;
+		///  - sans nom : l'alt ciblé, ou tous les alts du joueur s'il n'a aucune cible.
+		///    Une cible qui n'est pas un alt ne vise rien.
+		/// Affiche le message d'erreur et renvoie null si aucun alt n'est visé.
+		/// </summary>
+		private List<FakeGamePlayer> ResolveFakes(GameClient client, GamePlayer player, string[] args)
+		{
+			var fakes = new List<FakeGamePlayer>();
+
+			if (args.Length >= 3)
+			{
+				FakeGamePlayer named = FakePlayerMgr.FindByName(args[2]);
+				if (named == null)
+				{
+					DisplayMessage(client, "Aucun alt nommé {0} en jeu. Voir /fake list.", args[2]);
+					return null;
+				}
+				fakes.Add(named);
+			}
+			else if (player.TargetObject != null)
+			{
+				if (player.TargetObject is not FakeGamePlayer targeted)
+				{
+					DisplayMessage(client, "{0} n'est pas un alt.", player.TargetObject.Name);
+					return null;
+				}
+				fakes.Add(targeted);
+			}
+			else
+			{
+				fakes = FakePlayerMgr.GetFakesOf(player);
+			}
+
+			if (fakes.Count == 0)
+			{
+				DisplayMessage(client, "Vous n'avez aucun alt en jeu.");
+				return null;
+			}
+			return fakes;
 		}
 
 		/// <summary>Supprime tous les alts et affiche le nombre supprimé.</summary>

@@ -33,6 +33,24 @@ namespace DOL.GS.Scripts.FakePlayers
 		public bool IsFollowing { get; set; } = true;
 
 		/// <summary>
+		/// true = aucun combat (/fake passive) ; false = combat selon les règles de Combat/FakeCombat (/fake fight).
+		/// </summary>
+		public bool IsPassive { get; set; }
+
+		/// <summary>
+		/// Mode de combat de sa classe, lu dans la table FakePlayerClass à l'appel :
+		/// 1 = mêlée (va au contact), 2 = sorts (au palier 1 : se défend seulement).
+		/// </summary>
+		public int CombatMode { get; set; } = 1;
+
+		/// <summary>
+		/// La cible désignée par le propriétaire avec /fake attack (null = pas d'ordre en cours).
+		/// Passe avant tout le reste ; effacée quand la cible meurt ou disparaît, à la laisse,
+		/// avec /fake passive ou un nouvel ordre. Voir Combat/FakeCombat.
+		/// </summary>
+		public GameLiving OrderedTarget { get; set; }
+
+		/// <summary>
 		/// Jamais de sauvegarde en base (la sauvegarde automatique du serveur passe aussi par ici).
 		/// L'alt est figé : son personnage en base n'est jamais modifié (position, expérience...).
 		/// Pour qu'il progresse un jour comme un vrai joueur, il suffira de retirer cette méthode.

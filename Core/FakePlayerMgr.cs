@@ -98,7 +98,11 @@ namespace DOL.GS.Scripts.FakePlayers
 			try
 			{
 				// Le constructeur de GamePlayer charge tout depuis la base : inventaire, specs, sorts, artisanat...
-				fake = new FakeGamePlayer(client, dbChar) { Owner = owner };
+				fake = new FakeGamePlayer(client, dbChar)
+				{
+					Owner = owner,
+					CombatMode = FakeClassModes.GetMode(dbChar.Class), // relu en base à chaque appel
+				};
 				client.Player = fake;
 				client.ClientState = GameClient.eClientState.Playing; // le serveur le considère "en jeu"
 
@@ -269,13 +273,15 @@ namespace DOL.GS.Scripts.FakePlayers
 		/// Supprime puis rappelle un alt à côté de son propriétaire, en arrière-plan.
 		/// Utilisé quand le propriétaire change de région : un faux client ne peut pas faire
 		/// le changement de région d'un vrai joueur (le serveur attend une confirmation du jeu).
-		/// L'alt étant figé et rechargé depuis la base, il ne perd rien. Son ordre (stay/follow) est gardé.
+		/// L'alt étant figé et rechargé depuis la base, il ne perd rien.
+		/// Ses ordres (stay/follow, passive/fight) sont gardés.
 		/// </summary>
 		public static void Recall(FakeGamePlayer fake)
 		{
 			GamePlayer owner = fake.Owner;
 			string name = fake.Name;
 			bool following = fake.IsFollowing;
+			bool passive = fake.IsPassive;
 
 			RunInBackground("rappel de " + name, () =>
 			{
@@ -288,7 +294,10 @@ namespace DOL.GS.Scripts.FakePlayers
 				if (again == null)
 					owner.Out.SendMessage(name + " n'a pas pu vous suivre : " + error + ".", eChatType.CT_System, eChatLoc.CL_SystemWindow);
 				else
+				{
 					again.IsFollowing = following;
+					again.IsPassive = passive;
+				}
 			});
 		}
 

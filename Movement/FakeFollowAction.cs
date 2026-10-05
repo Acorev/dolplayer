@@ -3,7 +3,8 @@
  *
  * Fait suivre son propriétaire à un alt. Un timer par alt, toutes les TICK_MS millisecondes.
  *
- * À chaque tic, dans l'ordre :
+ * À chaque tic, le COMBAT passe en premier (voir Combat/FakeCombat) : l'alt ne suit son
+ * propriétaire que s'il n'a rien à combattre. Puis, dans l'ordre :
  *   1. le propriétaire a changé de région → l'alt est supprimé puis rappelé à côté de lui
  *      (un faux client ne peut pas faire le changement de région d'un vrai joueur) ;
  *   2. l'alt est en mode "stay" (/fake stay) ou mort → il ne bouge pas ;
@@ -80,14 +81,14 @@ namespace DOL.GS.Scripts.FakePlayers
 		private const float GROUND_SEARCH_Z = 128f;
 
 		/// <summary>Vitesse de course par défaut d'un joueur, si le serveur n'en donne pas.</summary>
-		private const short DEFAULT_SPEED = 191;
+		internal const short DEFAULT_SPEED = 191;
 
-		/// <summary>Le chemin en cours d'un alt (un par alt, gardé par son timer).</summary>
-		private class FollowState
+		/// <summary>Le chemin en cours d'un alt (un par alt, gardé par son timer). Partagé avec Combat/FakeCombat.</summary>
+		internal class FollowState
 		{
 			public List<Coordinate> Path = new();       // points du chemin, sans le point de départ
 			public int Index;                           // prochain point à atteindre
-			public Coordinate PlannedFor = Coordinate.Nowhere; // position du propriétaire au calcul du chemin
+			public Coordinate PlannedFor = Coordinate.Nowhere; // destination au calcul du chemin
 			public bool ErrorLogged;
 		}
 
@@ -149,8 +150,21 @@ namespace DOL.GS.Scripts.FakePlayers
 		/// <returns>true si la position a changé (il faut l'envoyer aux joueurs proches).</returns>
 		private static bool Update(FakeGamePlayer fake, GamePlayer owner, FollowState state)
 		{
-			// --- 2. Mode "stay" ou mort : on ne bouge pas.
-			if (!fake.IsFollowing || !fake.IsAlive)
+			// --- Mort : on ne bouge plus et on ne combat plus.
+			if (!fake.IsAlive)
+			{
+				FakeCombat.EndFight(fake);
+				return Stop(fake, state);
+			}
+
+			// --- Combat d'abord (voir Combat/FakeCombat) : l'alt ne suit que s'il n'a rien à combattre.
+			GameLiving target = FakeCombat.ChooseTarget(fake, owner);
+			if (target != null)
+				return FakeCombat.Fight(fake, target, state);
+			FakeCombat.EndFight(fake);
+
+			// --- 2. Mode "stay" : on ne bouge pas.
+			if (!fake.IsFollowing)
 				return Stop(fake, state);
 
 			Coordinate here = fake.Position.Coordinate;
@@ -181,6 +195,19 @@ namespace DOL.GS.Scripts.FakePlayers
 			}
 
 			// --- 5. Marche vers le propriétaire.
+			return Approach(fake, state, there, Speed(fake, owner, distance, stopAt));
+		}
+
+		/// <summary>
+		/// Fait marcher l'alt vers un point en suivant le chemin du navmesh (recalculé si le point a bougé).
+		/// Utilisé pour suivre le propriétaire, et par Combat/FakeCombat pour aller au contact d'une cible.
+		/// C'est l'appelant qui décide quand s'arrêter.
+		/// </summary>
+		/// <returns>true (la position change : il faut l'envoyer aux joueurs proches).</returns>
+		internal static bool Approach(FakeGamePlayer fake, FollowState state, Coordinate there, short speed)
+		{
+			Coordinate here = fake.Position.Coordinate;
+
 			if (state.Index >= state.Path.Count || state.PlannedFor.DistanceTo(there) > REPLAN_DISTANCE)
 				Plan(fake, there, state);
 
@@ -189,7 +216,6 @@ namespace DOL.GS.Scripts.FakePlayers
 				state.Index++;
 
 			Coordinate next = state.Index < state.Path.Count ? state.Path[state.Index] : there;
-			short speed = Speed(fake, owner, distance, stopAt);
 
 			if (fake.WalkDestination != next || fake.CurrentSpeed != speed)
 				fake.WalkTowards(next, speed);
@@ -285,7 +311,7 @@ namespace DOL.GS.Scripts.FakePlayers
 		}
 
 		/// <summary>Arrête l'alt et oublie son chemin. Renvoie true s'il marchait (position à envoyer).</summary>
-		private static bool Stop(FakeGamePlayer fake, FollowState state)
+		internal static bool Stop(FakeGamePlayer fake, FollowState state)
 		{
 			state.Path.Clear();
 			state.Index = 0;
