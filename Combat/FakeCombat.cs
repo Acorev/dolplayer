@@ -1,7 +1,8 @@
 /*
  * FakePlayers - Combat/FakeCombat.cs
  *
- * Combat des alts, PALIER 1 : corps à corps uniquement (armes et attaque automatique).
+ * Combat des alts au corps à corps : PALIER 1 (armes et attaque automatique)
+ * et PALIER 2 (styles de combat, voir Combat/FakeStyles).
  * Appelé à chaque tic par Movement/FakeFollowAction, AVANT le suivi : un alt ne suit son
  * propriétaire que s'il n'a rien à combattre.
  *
@@ -9,7 +10,8 @@
  *   0. l'ORDRE du propriétaire (/fake attack) : passe avant tout, même si l'alt combat déjà ;
  *   1. ce qui attaque l'alt lui-même (il se défend) ;
  *   2. ce qui attaque le propriétaire (il le défend) ;
- *   3. sa cible actuelle, tant qu'elle s'en prend au groupe.
+ *   3. ce qui attaque un autre membre du groupe (autre alt, autre joueur), le plus proche d'abord ;
+ *   4. sa cible actuelle, tant qu'elle s'en prend au groupe.
  * (Il n'y a PAS d'assistance automatique sur la cible du propriétaire : sinon les alts attaquaient
  *  tout ce qu'il cliquait. Pour les envoyer sur sa cible, il utilise /fake attack.)
  * Règles :
@@ -84,7 +86,12 @@ namespace DOL.GS.Scripts.FakePlayers
 			if (target != null)
 				return target;
 
-			// 3. Sa cible actuelle, tant qu'elle s'en prend au groupe.
+			// 3. Ce qui attaque un autre membre du groupe (autre alt, autre joueur), le plus proche d'abord.
+			target = NearestGroupAttacker(fake, owner);
+			if (target != null)
+				return target;
+
+			// 4. Sa cible actuelle, tant qu'elle s'en prend au groupe.
 			if (fake.AttackState && fake.TargetObject is GameLiving current && IsValidTarget(fake, owner, current)
 				&& current.TargetObject is GameLiving victim && IsGroupMember(owner, victim))
 				return current;
@@ -134,6 +141,9 @@ namespace DOL.GS.Scripts.FakePlayers
 			if (!fake.AttackState)
 				fake.StartAttack(target);
 
+			// Palier 2 : prépare un style de combat pour le prochain coup (voir Combat/FakeStyles).
+			FakeStyles.TryUseStyle(fake);
+
 			return moved;
 		}
 
@@ -148,6 +158,44 @@ namespace DOL.GS.Scripts.FakePlayers
 		}
 
 		// ================================================================= outils internes
+
+		/// <summary>
+		/// L'attaquant valide le plus proche de l'alt, parmi ceux qui s'en prennent à un membre du groupe
+		/// (autre que l'alt lui-même et le propriétaire, déjà traités avant). null si aucun.
+		/// </summary>
+		private static GameLiving NearestGroupAttacker(FakeGamePlayer fake, GamePlayer owner)
+		{
+			Group group = owner.Group;
+			if (group == null)
+				return null;
+
+			Coordinate here = fake.Position.Coordinate;
+			GameLiving nearest = null;
+			double nearestDistance = double.MaxValue;
+
+			foreach (GameLiving member in group.GetMembersInTheGroup())
+			{
+				if (member == fake || member == owner)
+					continue;
+
+				List<GameObject> attackers;
+				lock (member.Attackers)
+					attackers = member.Attackers.ToList();
+
+				foreach (GameLiving attacker in attackers.OfType<GameLiving>())
+				{
+					if (!IsValidTarget(fake, owner, attacker))
+						continue;
+					double distance = here.DistanceTo(attacker.Position.Coordinate);
+					if (distance < nearestDistance)
+					{
+						nearest = attacker;
+						nearestDistance = distance;
+					}
+				}
+			}
+			return nearest;
+		}
 
 		/// <summary>Le premier attaquant valide de la liste, ou null.</summary>
 		private static GameLiving FirstValid(FakeGamePlayer fake, GamePlayer owner, List<GameObject> attackers)
