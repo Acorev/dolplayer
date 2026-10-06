@@ -3,8 +3,9 @@
  *
  * Fait suivre son propriétaire à un alt. Un timer par alt, toutes les TICK_MS millisecondes.
  *
- * À chaque tic, le COMBAT passe en premier (voir Combat/FakeCombat) : l'alt ne suit son
- * propriétaire que s'il n'a rien à combattre. Puis, dans l'ordre :
+ * À chaque tic : pendant une incantation l'alt ne bouge pas ; puis la RÉSURRECTION du propriétaire
+ * (Combat/FakeRez), les SOINS (Combat/FakeHeals), puis les CHANTS (Combat/FakeChants), puis les BUFFS hors combat (Combat/FakeBuffs), puis le COMBAT (Combat/FakeCombat) :
+ * l'alt ne suit son propriétaire que s'il n'a rien à soigner, buffer ni combattre. Puis, dans l'ordre :
  *   1. le propriétaire a changé de région → l'alt est supprimé puis rappelé à côté de lui
  *      (un faux client ne peut pas faire le changement de région d'un vrai joueur) ;
  *   2. l'alt est en mode "stay" (/fake stay) ou mort → il ne bouge pas ;
@@ -150,6 +151,9 @@ namespace DOL.GS.Scripts.FakePlayers
 		/// <returns>true si la position a changé (il faut l'envoyer aux joueurs proches).</returns>
 		private static bool Update(FakeGamePlayer fake, GamePlayer owner, FollowState state)
 		{
+			// --- Aggro : corrections en attente selon le pourcentage de sa classe (voir Combat/FakeAggro).
+			FakeAggro.Flush(fake);
+
 			// --- Mort : on ne bouge plus et on ne combat plus.
 			if (!fake.IsAlive)
 			{
@@ -157,7 +161,27 @@ namespace DOL.GS.Scripts.FakePlayers
 				return Stop(fake, state);
 			}
 
-			// --- Combat d'abord (voir Combat/FakeCombat) : l'alt ne suit que s'il n'a rien à combattre.
+			// --- Incantation en cours : on ne bouge pas (bouger l'interromprait) et on ne change pas de cible.
+			if (fake.IsCasting)
+				return Stop(fake, state);
+
+			// --- Résurrection du propriétaire, combat fini (voir Combat/FakeRez).
+			if (FakeRez.Update(fake, owner, state, out bool rezMoved))
+				return rezMoved;
+
+			// --- Soins d'abord (voir Combat/FakeHeals) : soigner passe avant tout le reste.
+			if (FakeHeals.Update(fake, owner, state, out bool healMoved))
+				return healMoved;
+
+			// --- Chants ensuite (voir Combat/FakeChants) : garder les bons chants actifs.
+			if (FakeChants.Update(fake, owner, state, out bool chantMoved))
+				return chantMoved;
+
+			// --- Buffs ensuite, hors combat seulement (voir Combat/FakeBuffs).
+			if (FakeBuffs.Update(fake, owner, state, out bool buffMoved))
+				return buffMoved;
+
+			// --- Combat ensuite (voir Combat/FakeCombat) : l'alt ne suit que s'il n'a rien à combattre.
 			GameLiving target = FakeCombat.ChooseTarget(fake, owner);
 			if (target != null)
 				return FakeCombat.Fight(fake, target, state);

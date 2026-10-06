@@ -98,10 +98,17 @@ namespace DOL.GS.Scripts.FakePlayers
 			try
 			{
 				// Le constructeur de GamePlayer charge tout depuis la base : inventaire, specs, sorts, artisanat...
+				// Réglages de sa classe (table FakePlayerClass), relus en base à chaque appel.
+				FakeClassSettings settings = FakeClassModes.GetSettings(dbChar.Class);
 				fake = new FakeGamePlayer(client, dbChar)
 				{
 					Owner = owner,
-					CombatMode = FakeClassModes.GetMode(dbChar.Class), // relu en base à chaque appel
+					CombatMode = settings.CombatMode,
+					HealMode = settings.HealMode,
+					HealThreshold = settings.HealThreshold,
+					EmergencyThreshold = settings.EmergencyThreshold,
+					BuffMode = settings.BuffMode,
+					AggroPercent = settings.AggroPercent,
 				};
 				client.Player = fake;
 				client.ClientState = GameClient.eClientState.Playing; // le serveur le considère "en jeu"

@@ -44,6 +44,36 @@ namespace DOL.GS.Scripts.FakePlayers
 		public int CombatMode { get; set; } = 1;
 
 		/// <summary>
+		/// Réglages de soin de sa classe (table FakePlayerClass, lus à l'appel) :
+		/// FakePlayerClass.HEAL_NEVER, HEAL_EMERGENCY ou HEAL_HEALER. Voir Combat/FakeHeals.
+		/// </summary>
+		public int HealMode { get; set; } = FakePlayerClass.HEAL_EMERGENCY;
+
+		/// <summary>Seuil de vie (%) sous lequel il soigne, en tant que soigneur.</summary>
+		public int HealThreshold { get; set; } = FakeClassModes.DEFAULT_HEAL_THRESHOLD;
+
+		/// <summary>Seuil de vie (%) d'un soin d'urgence.</summary>
+		public int EmergencyThreshold { get; set; } = FakeClassModes.DEFAULT_EMERGENCY_THRESHOLD;
+
+		/// <summary>Qui il buffe : FakePlayerClass.BUFF_GROUP, BUFF_NEVER ou BUFF_SELF. Voir Combat/FakeBuffs.</summary>
+		public int BuffMode { get; set; } = FakePlayerClass.BUFF_GROUP;
+
+		/// <summary>Aggro qu'il génère, en % de l'aggro normale (table FakePlayerClass). Voir Combat/FakeAggro.</summary>
+		public int AggroPercent { get; set; } = 100;
+
+		/// <summary>
+		/// Niveau auquel sa liste de sorts a été lue pour la dernière fois (-1 = jamais).
+		/// Quand il monte de niveau, la liste est relue (voir Combat/FakeSpellCast.KnownSpells).
+		/// </summary>
+		public int SpellsCheckedLevel { get; set; } = -1;
+
+		/// <summary>Niveau auquel on a vérifié s'il connaît des soins (-1 = jamais). Voir Combat/FakeHeals.HasHealSpells.</summary>
+		public int HealSpellsCheckedLevel { get; set; } = -1;
+
+		/// <summary>true s'il connaît au moins un sort de soin utilisable (résultat de la dernière vérification).</summary>
+		public bool KnowsHealSpells { get; set; }
+
+		/// <summary>
 		/// La cible désignée par le propriétaire avec /fake attack (null = pas d'ordre en cours).
 		/// Passe avant tout le reste ; effacée quand la cible meurt ou disparaît, à la laisse,
 		/// avec /fake passive ou un nouvel ordre. Voir Combat/FakeCombat.

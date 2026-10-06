@@ -1,8 +1,9 @@
 /*
  * FakePlayers - Combat/FakeCombat.cs
  *
- * Combat des alts au corps à corps : PALIER 1 (armes et attaque automatique)
- * et PALIER 2 (styles de combat, voir Combat/FakeStyles).
+ * Combat des alts : PALIER 1 (corps à corps, armes et attaque automatique),
+ * PALIER 2 (styles de combat, voir Combat/FakeStyles) et PALIER 3 (sorts de dégâts à distance pour
+ * les lanceurs, voir Combat/FakeDamage).
  * Appelé à chaque tic par Movement/FakeFollowAction, AVANT le suivi : un alt ne suit son
  * propriétaire que s'il n'a rien à combattre.
  *
@@ -17,8 +18,9 @@
  * Règles :
  *   - /fake passive : aucun combat (et annule l'ordre en cours) ;
  *   - mode "stay" : se défend seulement (1), sans se déplacer ; mais obéit à /fake attack ;
- *   - mode de classe 2 (sorts, table FakePlayerClass) : se défend seulement (1), en attendant
- *     le palier 3 ; n'obéit pas encore à /fake attack ;
+ *   - mode de classe 2 (sorts, table FakePlayerClass) : lanceur de dégâts à distance (Combat/FakeDamage),
+ *     sauf les soigneurs (HealMode soigneur) qui se défendent seulement (1) et n'obéissent pas à /fake attack ;
+ *   - chanteur (chansons à instrument, voir Combat/FakeChants) : garde l'instrument et ne combat pas ;
  *   - laisse : au-delà de LEASH_DISTANCE du propriétaire, l'alt abandonne (ordre compris) et revient.
  * L'ordre prend fin quand la cible meurt ou disparaît, à la laisse, avec un nouvel ordre ou /fake passive.
  *
@@ -57,6 +59,13 @@ namespace DOL.GS.Scripts.FakePlayers
 			if (fake.IsPassive || !fake.IsAlive)
 				return null;
 
+			// Chanteur (Minstrel, Bard...) : il garde son instrument en main et ne combat pas (Combat/FakeChants).
+			if (FakeChants.IsSinger(fake) && !FakeDamage.IsNuker(fake))
+			{
+				fake.OrderedTarget = null;
+				return null;
+			}
+
 			// Laisse : trop loin du propriétaire, on ne combat plus (le suivi le ramène), ordre compris.
 			if (fake.Position.Coordinate.DistanceTo(owner.Position.Coordinate) > LEASH_DISTANCE)
 			{
@@ -77,8 +86,8 @@ namespace DOL.GS.Scripts.FakePlayers
 			if (target != null)
 				return target;
 
-			// En stay ou en mode sorts : uniquement la défense personnelle.
-			if (!fake.IsFollowing || fake.CombatMode != FakePlayerClass.MODE_MELEE)
+			// En stay, ou soigneur en mode sorts (pas de dégâts) : uniquement la défense personnelle.
+			if (!fake.IsFollowing || !(fake.CombatMode == FakePlayerClass.MODE_MELEE || FakeDamage.IsNuker(fake)))
 				return null;
 
 			// 2. Ce qui attaque le propriétaire.
@@ -92,7 +101,7 @@ namespace DOL.GS.Scripts.FakePlayers
 				return target;
 
 			// 4. Sa cible actuelle, tant qu'elle s'en prend au groupe.
-			if (fake.AttackState && fake.TargetObject is GameLiving current && IsValidTarget(fake, owner, current)
+			if ((fake.AttackState || FakeDamage.IsNuker(fake)) && fake.TargetObject is GameLiving current && IsValidTarget(fake, owner, current)
 				&& current.TargetObject is GameLiving victim && IsGroupMember(owner, victim))
 				return current;
 
@@ -102,10 +111,22 @@ namespace DOL.GS.Scripts.FakePlayers
 		// ================================================================= combat
 
 		/// <summary>
-		/// Fait combattre l'alt contre sa cible : approche (sauf en stay, hors ordre), se tourne vers elle, attaque.
+		/// Fait combattre l'alt contre sa cible : à distance avec ses sorts s'il est lanceur de dégâts
+		/// (Combat/FakeDamage), sinon au corps à corps.
 		/// </summary>
 		/// <returns>true si la position a changé (il faut l'envoyer aux joueurs proches).</returns>
 		internal static bool Fight(FakeGamePlayer fake, GameLiving target, FakeFollowAction.FollowState state)
+		{
+			if (FakeDamage.IsNuker(fake))
+				return FakeDamage.Fight(fake, target, state);
+			return Melee(fake, target, state);
+		}
+
+		/// <summary>
+		/// Corps à corps : approche (sauf en stay, hors ordre), se tourne vers la cible, attaque, styles.
+		/// </summary>
+		/// <returns>true si la position a changé (il faut l'envoyer aux joueurs proches).</returns>
+		internal static bool Melee(FakeGamePlayer fake, GameLiving target, FakeFollowAction.FollowState state)
 		{
 			Coordinate here = fake.Position.Coordinate;
 			Coordinate there = target.Position.Coordinate;

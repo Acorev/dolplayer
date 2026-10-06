@@ -57,7 +57,49 @@ namespace DOL.GS.Scripts.FakePlayers
 			[eCharacterClass.Mentalist] = S, [eCharacterClass.Animist] = S, [eCharacterClass.Bainshee] = S,
 		};
 
-		/// <summary>Au démarrage : ajoute à la table les classes qui n'y sont pas encore.</summary>
+		/// <summary>
+		/// Aggro par défaut de chaque classe (%), utilisée quand la colonne AggroPercent vaut 0.
+		/// Les classes absentes de cette liste sont à 100 %.
+		/// </summary>
+		private static readonly Dictionary<eCharacterClass, int> DEFAULT_AGGRO = BuildDefaultAggro();
+
+		private static Dictionary<eCharacterClass, int> BuildDefaultAggro()
+		{
+			var result = new Dictionary<eCharacterClass, int>();
+			void Set(int percent, params eCharacterClass[] classes)
+			{
+				foreach (eCharacterClass c in classes)
+					result[c] = percent;
+			}
+
+			// Tanks : gardent l'aggro en tapant.
+			Set(200, eCharacterClass.Armsman, eCharacterClass.Warrior, eCharacterClass.Hero);
+			// Hybrides.
+			Set(130, eCharacterClass.Paladin, eCharacterClass.Reaver, eCharacterClass.Thane,
+				eCharacterClass.Valkyrie, eCharacterClass.Champion);
+			// Lanceurs.
+			Set(70, eCharacterClass.Wizard, eCharacterClass.Sorcerer, eCharacterClass.Theurgist,
+				eCharacterClass.Cabalist, eCharacterClass.Necromancer,
+				eCharacterClass.Runemaster, eCharacterClass.Spiritmaster, eCharacterClass.Bonedancer,
+				eCharacterClass.Warlock,
+				eCharacterClass.Eldritch, eCharacterClass.Enchanter, eCharacterClass.Mentalist,
+				eCharacterClass.Animist, eCharacterClass.Bainshee);
+			// Soigneurs.
+			Set(30, eCharacterClass.Cleric, eCharacterClass.Friar, eCharacterClass.Healer,
+				eCharacterClass.Shaman, eCharacterClass.Druid, eCharacterClass.Bard, eCharacterClass.Warden);
+			// Toutes les autres (mêlée, furtifs, archers, chanteurs...) : 100.
+			return result;
+		}
+
+		/// <summary>Aggro par défaut (%) d'une classe.</summary>
+		public static int DefaultAggro(int classId)
+			=> DEFAULT_AGGRO.TryGetValue((eCharacterClass)classId, out int percent) ? percent : 100;
+
+		/// <summary>
+		/// Au démarrage : ajoute à la table les classes qui n'y sont pas encore, et remplit la colonne
+		/// AggroPercent des lignes où elle vaut 0 (colonne tout juste ajoutée) avec la valeur par défaut,
+		/// pour qu'elle soit visible et modifiable en base. Les autres valeurs ne sont jamais touchées.
+		/// </summary>
 		[ScriptLoadedEvent]
 		public static void OnScriptLoaded(DOLEvent e, object sender, EventArgs args)
 		{
@@ -66,13 +108,26 @@ namespace DOL.GS.Scripts.FakePlayers
 				var existing = new HashSet<int>(DOLDB<FakePlayerClass>.SelectAllObjects().Select(r => r.ClassID));
 				var missing = DEFAULT_MODES
 					.Where(kv => !existing.Contains((int)kv.Key))
-					.Select(kv => new FakePlayerClass { ClassID = (int)kv.Key, ClassName = kv.Key.ToString(), CombatMode = kv.Value })
+					.Select(kv => new FakePlayerClass
+					{
+						ClassID = (int)kv.Key, ClassName = kv.Key.ToString(), CombatMode = kv.Value,
+						AggroPercent = DefaultAggro((int)kv.Key),
+					})
 					.ToList();
 
 				if (missing.Count > 0)
 				{
 					GameServer.Database.AddObject(missing);
 					log.Info("[FakePlayers] table FakePlayerClass : " + missing.Count + " classe(s) ajoutée(s).");
+				}
+
+				var noAggro = DOLDB<FakePlayerClass>.SelectAllObjects().Where(r => r.AggroPercent == 0).ToList();
+				if (noAggro.Count > 0)
+				{
+					foreach (FakePlayerClass row in noAggro)
+						row.AggroPercent = DefaultAggro(row.ClassID);
+					GameServer.Database.SaveObject(noAggro);
+					log.Info("[FakePlayers] table FakePlayerClass : AggroPercent rempli pour " + noAggro.Count + " classe(s).");
 				}
 			}
 			catch (Exception ex)
@@ -81,27 +136,68 @@ namespace DOL.GS.Scripts.FakePlayers
 			}
 		}
 
+		/// <summary>Seuil de soin par défaut d'un soigneur (% de vie), si la colonne vaut 0.</summary>
+		public const int DEFAULT_HEAL_THRESHOLD = 75;
+
+		/// <summary>Seuil de soin d'urgence par défaut (% de vie), si la colonne vaut 0.</summary>
+		public const int DEFAULT_EMERGENCY_THRESHOLD = 40;
+
 		/// <summary>
-		/// Mode de combat d'une classe, lu en base à chaque appel (les changements en base s'appliquent tout de suite).
-		/// Classe absente de la table, ou valeur invalide : déduit du type de classe de DOLSharp
-		/// (lanceur de sorts = 2, sinon 1).
+		/// Réglages d'une classe, lus en base à chaque appel d'un alt (les changements en base s'appliquent
+		/// au prochain /fake call). Les valeurs "auto" (0) sont résolues ici :
+		///  - CombatMode invalide : lanceur de sorts = 2, sinon 1 ;
+		///  - HealMode 0 : soigneur si CombatMode 2, urgence seulement si CombatMode 1 ;
+		///  - seuils 0 (ou hors 1..99) : valeurs par défaut ;
+		///  - BuffMode 0 (ou invalide) : buffe le groupe ;
+		///  - AggroPercent 0 (ou hors 1..AGGRO_MAX) : valeur par défaut de la classe.
 		/// </summary>
-		public static int GetMode(int classId)
+		public static FakeClassSettings GetSettings(int classId)
 		{
+			FakePlayerClass row = null;
 			try
 			{
-				FakePlayerClass row = DOLDB<FakePlayerClass>.SelectObject(DB.Column(nameof(FakePlayerClass.ClassID)).IsEqualTo(classId));
-				if (row != null && (row.CombatMode == FakePlayerClass.MODE_MELEE || row.CombatMode == FakePlayerClass.MODE_SPELLS))
-					return row.CombatMode;
+				row = DOLDB<FakePlayerClass>.SelectObject(DB.Column(nameof(FakePlayerClass.ClassID)).IsEqualTo(classId));
 			}
 			catch (Exception ex)
 			{
 				log.Warn("[FakePlayers] lecture de FakePlayerClass impossible pour la classe " + classId, ex);
 			}
 
-			return CharacterClass.GetClass(classId).ClassType == eClassType.ListCaster
-				? FakePlayerClass.MODE_SPELLS
-				: FakePlayerClass.MODE_MELEE;
+			int combatMode = row != null && (row.CombatMode == FakePlayerClass.MODE_MELEE || row.CombatMode == FakePlayerClass.MODE_SPELLS)
+				? row.CombatMode
+				: CharacterClass.GetClass(classId).ClassType == eClassType.ListCaster ? FakePlayerClass.MODE_SPELLS : FakePlayerClass.MODE_MELEE;
+
+			int healMode = row?.HealMode ?? FakePlayerClass.HEAL_AUTO;
+			if (healMode != FakePlayerClass.HEAL_NEVER && healMode != FakePlayerClass.HEAL_EMERGENCY && healMode != FakePlayerClass.HEAL_HEALER)
+				healMode = combatMode == FakePlayerClass.MODE_SPELLS ? FakePlayerClass.HEAL_HEALER : FakePlayerClass.HEAL_EMERGENCY;
+
+			int buffMode = row?.BuffMode ?? FakePlayerClass.BUFF_GROUP;
+			if (buffMode != FakePlayerClass.BUFF_NEVER && buffMode != FakePlayerClass.BUFF_SELF)
+				buffMode = FakePlayerClass.BUFF_GROUP;
+
+			return new FakeClassSettings(
+				combatMode,
+				healMode,
+				Percent(row?.HealThreshold ?? 0, DEFAULT_HEAL_THRESHOLD),
+				Percent(row?.EmergencyThreshold ?? 0, DEFAULT_EMERGENCY_THRESHOLD),
+				buffMode,
+				row != null && row.AggroPercent >= 1 && row.AggroPercent <= FakePlayerClass.AGGRO_MAX
+					? row.AggroPercent
+					: DefaultAggro(classId));
 		}
+
+		/// <summary>Un pourcentage valide (1 à 99), sinon la valeur par défaut.</summary>
+		private static int Percent(int value, int fallback)
+			=> value >= 1 && value <= 99 ? value : fallback;
 	}
+
+	/// <summary>Les réglages d'une classe, une fois les valeurs "auto" résolues.</summary>
+	/// <param name="CombatMode">1 = mêlée, 2 = sorts.</param>
+	/// <param name="HealMode">FakePlayerClass.HEAL_NEVER, HEAL_EMERGENCY ou HEAL_HEALER (jamais AUTO).</param>
+	/// <param name="HealThreshold">% de vie sous lequel un soigneur soigne.</param>
+	/// <param name="EmergencyThreshold">% de vie d'un soin d'urgence.</param>
+	/// <param name="BuffMode">FakePlayerClass.BUFF_GROUP, BUFF_NEVER ou BUFF_SELF.</param>
+	/// <param name="AggroPercent">Aggro générée, en % de l'aggro normale (1 à AGGRO_MAX).</param>
+	public record FakeClassSettings(int CombatMode, int HealMode, int HealThreshold, int EmergencyThreshold, int BuffMode,
+		int AggroPercent);
 }

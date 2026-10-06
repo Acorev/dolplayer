@@ -7,6 +7,7 @@
  */
 
 using System.Collections.Generic;
+using System.Linq;
 using DOL.GS.Commands;
 
 namespace DOL.GS.Scripts.FakePlayers
@@ -31,16 +32,17 @@ namespace DOL.GS.Scripts.FakePlayers
 		"/fake remove all - supprime tous les alts",
 		"/fake stay [nom] - l'alt ciblé (ou nommé, sans cible : tous les vôtres) reste sur place",
 		"/fake follow [nom] - l'alt ciblé (ou nommé, sans cible : tous les vôtres) vous suit à nouveau",
-		"/fake attack [nom] - vos alts de mêlée (ou l'alt nommé) attaquent votre cible, même s'ils combattent déjà",
+		"/fake attack [nom] - vos alts (ou l'alt nommé) attaquent votre cible, même s'ils combattent déjà (sauf soigneurs)",
 		"/fake passive [nom] - l'alt ciblé (ou nommé, sans cible : tous les vôtres) ne combat plus",
 		"/fake fight [nom] - l'alt ciblé (ou nommé, sans cible : tous les vôtres) combat à nouveau",
+		"/fake spells [nom] - diagnostic : sorts de l'alt ciblé (ou nommé), soins et buffs retenus",
 		"/fake nav - teste le navmesh à votre position (et le chemin vers votre cible)")]
 	public class FakePlayerCommandHandler : AbstractCommandHandler, ICommandHandler
 	{
 		/// <summary>
 		/// Appelée par le serveur à chaque /fake.
 		/// args[0] = "&amp;fake", args[1] = la sous-commande (call, team, list, remove, stay, follow,
-		/// attack, passive, fight, nav),
+		/// attack, passive, fight, spells, nav),
 		/// args[2] = le paramètre éventuel.
 		/// </summary>
 		public void OnCommand(GameClient client, string[] args)
@@ -84,6 +86,9 @@ namespace DOL.GS.Scripts.FakePlayers
 					break;
 				case "fight":
 					SetPassive(client, player, args, false);
+					break;
+				case "spells":
+					Spells(client, player, args);
 					break;
 				case "nav":
 					// Diagnostic du navmesh (voir Movement/FakeNavCheck).
@@ -299,7 +304,7 @@ namespace DOL.GS.Scripts.FakePlayers
 		/// <summary>
 		/// /fake attack [nom] : vos alts (ou l'alt nommé) attaquent VOTRE cible actuelle (voir Combat/FakeCombat).
 		/// L'ordre passe avant tout, même si l'alt combat déjà, et vaut aussi pour un alt en stay.
-		/// Ne sont pas concernés : les alts en mode sorts (palier 1) et les alts passifs.
+		/// Ne sont pas concernés : les soigneurs (HealMode soigneur) et les alts passifs.
 		/// Ici, la cible du joueur est l'ennemi : sans nom, ce sont donc TOUS ses alts qui obéissent.
 		/// </summary>
 		private void Attack(GameClient client, GamePlayer player, string[] args)
@@ -338,8 +343,8 @@ namespace DOL.GS.Scripts.FakePlayers
 			{
 				if (fake.IsPassive)
 					skipped.Add(fake.Name + " (passif)");
-				else if (fake.CombatMode != FakePlayerClass.MODE_MELEE)
-					skipped.Add(fake.Name + " (sorts)");
+				else if (fake.CombatMode != FakePlayerClass.MODE_MELEE && !FakeDamage.IsNuker(fake))
+					skipped.Add(fake.Name + " (soigneur)");
 				else if (!FakeCombat.IsValidTarget(fake, player, target))
 					skipped.Add(fake.Name + " (cible non attaquable ou trop loin)");
 				else
@@ -353,6 +358,98 @@ namespace DOL.GS.Scripts.FakePlayers
 				DisplayMessage(client, "{0} : attaque {1}.", string.Join(", ", attacking), target.Name);
 			if (skipped.Count > 0)
 				DisplayMessage(client, "N'obéit pas : {0}.", string.Join(", ", skipped));
+		}
+
+		/// <summary>
+		/// /fake spells [nom] : diagnostic des sorts d'un alt (l'alt nommé, sinon l'alt ciblé).
+		/// Affiche son niveau, ses réglages de soin, de buff et d'aggro, puis chaque sort appris avec son type, sa cible,
+		/// sa portée, sa valeur, et s'il est retenu comme soin ou buff (ou pourquoi il est écarté).
+		/// </summary>
+		private void Spells(GameClient client, GamePlayer player, string[] args)
+		{
+			FakeGamePlayer fake = args.Length >= 3 ? FakePlayerMgr.FindByName(args[2]) : player.TargetObject as FakeGamePlayer;
+			if (fake == null)
+			{
+				DisplayMessage(client, "Usage : /fake spells <nom>, ou ciblez un alt.");
+				return;
+			}
+
+			string healMode = fake.HealMode switch
+			{
+				FakePlayerClass.HEAL_NEVER => "ne soigne jamais",
+				FakePlayerClass.HEAL_EMERGENCY => "urgence sous " + fake.EmergencyThreshold + " %",
+				FakePlayerClass.HEAL_HEALER => FakeHeals.HasHealSpells(fake)
+					? "soigneur sous " + fake.HealThreshold + " %"
+					: "soigneur, mais aucun soin connu (lance des dégâts)",
+				_ => "?",
+			};
+			string buffMode = fake.BuffMode switch
+			{
+				FakePlayerClass.BUFF_NEVER => "jamais",
+				FakePlayerClass.BUFF_SELF => "lui-même",
+				_ => "le groupe",
+			};
+			DisplayMessage(client, "{0} : {1} niveau {2}, mode {3}, soins : {4}, buffs : {5}, aggro {6} %, mana {7}/{8}, concentration {9}/{10}.",
+				fake.Name, fake.CharacterClass.GetSalutation(fake.Gender), fake.Level,
+				fake.CombatMode == FakePlayerClass.MODE_MELEE ? "mêlée" : "sorts",
+				healMode, buffMode, fake.AggroPercent, fake.Mana, fake.MaxMana, fake.Concentration, fake.MaxConcentration);
+
+			List<FakeSpellCast.KnownSpell> spells = FakeSpellCast.KnownSpells(fake);
+			if (spells.Count == 0)
+			{
+				DisplayMessage(client, "  Aucun sort appris.");
+				return;
+			}
+
+			int heals = 0, buffs = 0, damage = 0, chants = 0, rez = 0;
+			foreach (var group in spells.GroupBy(k => k.Line.Name))
+			{
+				DisplayMessage(client, "Ligne {0} :", group.Key);
+				foreach (FakeSpellCast.KnownSpell known in group.OrderBy(k => k.Spell.Level))
+				{
+					Spell s = known.Spell;
+					string verdict = FakeHeals.Classify(s, out bool isHeal, out _);
+					string chantVerdict = FakeChants.Classify(s, out bool isChant);
+					if (FakeRez.IsRez(s))
+					{
+						rez++;
+						verdict = "résurrection (de vous seulement, combat fini)";
+					}
+					else if (isChant || s.IsPulsing)
+					{
+						// Sort pulsé : chant (voir Combat/FakeChants).
+						if (isChant)
+							chants++;
+						verdict = isChant && FakeChants.IsActive(fake, s) ? chantVerdict + " actif" : chantVerdict;
+					}
+					else if (isHeal)
+						heals++;
+					else if (!s.IsHealing)
+					{
+						// Pas un soin : est-ce un buff ?
+						string buffVerdict = FakeBuffs.Classify(s, out bool isBuff);
+						if (isBuff)
+							buffs++;
+						if (isBuff || buffVerdict != "écarté : pas un buff")
+							verdict = buffVerdict;
+						else
+						{
+							// Ni soin ni buff : est-ce un sort de dégâts ?
+							string damageVerdict = FakeDamage.Classify(s, out bool isDamage);
+							if (isDamage)
+								damage++;
+							verdict = damageVerdict == "écarté : pas un sort de dégâts" ? "écarté : ni soin, ni buff, ni dégâts" : damageVerdict;
+						}
+					}
+					DisplayMessage(client, "  {0} (niv {1}) : {2}, cible {3}, portée {4}, valeur {5} -> {6}",
+						s.Name, s.Level, s.SpellType, s.Target, s.Range, s.Value, verdict);
+				}
+			}
+			DisplayMessage(client, "{0} sort(s) appris, dont {1} soin(s), {2} buff(s), {3} chant(s) (max {5} actifs{6}), {8} résurrection(s) et {4} sort(s) de dégâts retenu(s){7}.",
+				spells.Count, heals, buffs, chants, damage, fake.CharacterClass.MaxPulsingSpells,
+				FakeChants.IsSinger(fake) ? ", chanteur : ne combat pas" : "",
+				damage > 0 && !FakeDamage.IsNuker(fake) ? " (dégâts inutilisés : l'alt n'est pas lanceur de dégâts)" : "",
+				rez);
 		}
 
 		/// <summary>

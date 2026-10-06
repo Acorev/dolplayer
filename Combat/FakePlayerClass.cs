@@ -53,5 +53,79 @@ namespace DOL.GS.Scripts.FakePlayers
 			get => m_combatMode;
 			set { Dirty = true; m_combatMode = value; }
 		}
+
+		// ----------------------------------------------------------------- soins (palier 3)
+		// 0 veut toujours dire "automatique / valeur par défaut" : quand DOLSharp ajoute ces colonnes
+		// à une table existante, il y met 0, et tout fonctionne sans rien remplir.
+
+		/// <summary>Soins : 0 = auto (mode 2 → soigneur, mode 1 → urgence), 1 = jamais, 2 = urgence seulement, 3 = soigneur.</summary>
+		public const int HEAL_AUTO = 0;
+		public const int HEAL_NEVER = 1;
+		public const int HEAL_EMERGENCY = 2;
+		public const int HEAL_HEALER = 3;
+
+		private int m_healMode;
+		private int m_healThreshold;
+		private int m_emergencyThreshold;
+
+		/// <summary>Qui soigne et comment (voir les constantes HEAL_...).</summary>
+		[DataElement(AllowDbNull = false)]
+		public int HealMode
+		{
+			get => m_healMode;
+			set { Dirty = true; m_healMode = value; }
+		}
+
+		/// <summary>Seuil de vie (%) sous lequel un soigneur soigne. 0 = défaut (75).</summary>
+		[DataElement(AllowDbNull = false)]
+		public int HealThreshold
+		{
+			get => m_healThreshold;
+			set { Dirty = true; m_healThreshold = value; }
+		}
+
+		/// <summary>Seuil de vie (%) d'un soin d'urgence. 0 = défaut (40).</summary>
+		[DataElement(AllowDbNull = false)]
+		public int EmergencyThreshold
+		{
+			get => m_emergencyThreshold;
+			set { Dirty = true; m_emergencyThreshold = value; }
+		}
+
+		// ----------------------------------------------------------------- buffs (palier 3)
+
+		/// <summary>Buffs : 0 = auto (buffe le groupe), 1 = jamais, 2 = seulement lui-même.</summary>
+		public const int BUFF_GROUP = 0;
+		public const int BUFF_NEVER = 1;
+		public const int BUFF_SELF = 2;
+
+		private int m_buffMode;
+
+		/// <summary>Qui l'alt buffe (voir les constantes BUFF_...). 0 = auto : tout le groupe.</summary>
+		[DataElement(AllowDbNull = false)]
+		public int BuffMode
+		{
+			get => m_buffMode;
+			set { Dirty = true; m_buffMode = value; }
+		}
+
+		// ----------------------------------------------------------------- aggro
+
+		/// <summary>Pourcentage d'aggro maximum accepté ; au-delà (faute de frappe), la valeur par défaut s'applique.</summary>
+		public const int AGGRO_MAX = 500;
+
+		private int m_aggroPercent;
+
+		/// <summary>
+		/// Aggro générée par l'alt (dégâts et soins), en % de l'aggro normale : 30 = trois fois moins,
+		/// 200 = deux fois plus. 0 = valeur par défaut de la classe (voir Combat/FakeClassModes).
+		/// Valeurs acceptées : 1 à AGGRO_MAX. Voir Combat/FakeAggro.
+		/// </summary>
+		[DataElement(AllowDbNull = false)]
+		public int AggroPercent
+		{
+			get => m_aggroPercent;
+			set { Dirty = true; m_aggroPercent = value; }
+		}
 	}
 }
