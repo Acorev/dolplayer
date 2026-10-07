@@ -5,7 +5,7 @@
  * Toutes les autres classes passent par lui (la commande /fake n'appelle que FakePlayerMgr).
  *
  * Création d'un faux joueur, étape par étape (méthode Spawn) :
- *   1. vérifier le nom ;
+ *   1. vérifier le nom : valide, et LIBRE (aucun personnage en base, aucun joueur en jeu, aucun faux joueur) ;
  *   2. fabriquer en mémoire un personnage (DOLCharacters) et un compte (Account), copiés sur le créateur ;
  *   3. fabriquer un faux client réseau (FakeGameClient) et lui donner un numéro de session ;
  *   4. fabriquer le faux joueur (FakeGamePlayer) et l'ajouter au monde ;
@@ -48,6 +48,13 @@ namespace DOL.GS.Scripts.FakePlayers
 		/// <summary>Verrou qui protège la liste _fakes.</summary>
 		private static readonly object _lock = new();
 
+		/// <summary>
+		/// Noms en cours de création (vérifiés mais pas encore dans _fakes).
+		/// Empêche deux /fake create Bob tapés en même temps (par deux joueurs) de passer tous les deux.
+		/// Toujours y accéder sous verrou (_lock).
+		/// </summary>
+		private static readonly HashSet<string> _reserved = new(StringComparer.OrdinalIgnoreCase);
+
 		// ================================================================= création
 
 		/// <summary>
@@ -69,12 +76,26 @@ namespace DOL.GS.Scripts.FakePlayers
 				return null;
 
 			name = FormatName(name);
-			if (FindByName(name) != null || WorldMgr.GetClientByPlayerName(name, true, false) != null)
-			{
-				error = "le nom " + name + " est déjà utilisé par un joueur en jeu";
+			if (!ReserveName(name, out error))
 				return null;
-			}
 
+			try
+			{
+				return Create(owner, name, out error);
+			}
+			finally
+			{
+				// Créé (il est maintenant dans _fakes) ou échec : la réservation n'est plus utile.
+				lock (_lock)
+					_reserved.Remove(name);
+			}
+		}
+
+		/// <summary>
+		/// Étapes 2 à 5 de la création, une fois le nom vérifié et réservé (voir Spawn).
+		/// </summary>
+		private static FakeGamePlayer Create(GamePlayer owner, string name, out string error)
+		{
 			// --- 2 et 3. Personnage, compte et faux client, uniquement en mémoire (rien en base)
 			DOLCharacters dbChar = BuildCharacter(owner, name);
 			var client = new FakeGameClient(BuildAccount(owner, dbChar));
@@ -194,6 +215,49 @@ namespace DOL.GS.Scripts.FakePlayers
 		}
 
 		// ================================================================= outils internes
+
+		/// <summary>
+		/// Vérifie que le nom est libre et le réserve le temps de la création :
+		///  - aucun personnage en base ne le porte (même hors ligne : le vrai joueur pourrait se connecter) ;
+		///  - aucun joueur connecté ne le porte ;
+		///  - aucun faux joueur (créé ou en cours de création) ne le porte.
+		/// Majuscules/minuscules ignorées : "bob" et "Bob" sont le même nom.
+		/// </summary>
+		/// <param name="error">La raison du refus, ou null.</param>
+		/// <returns>true si le nom est libre (il est alors réservé : Spawn le libère à la fin).</returns>
+		private static bool ReserveName(string name, out string error)
+		{
+			// 1. Un vrai personnage en base.
+			if (DOLDB<DOLCharacters>.SelectObject(DB.Column(nameof(DOLCharacters.Name)).IsEqualTo(name)) != null)
+			{
+				error = "le nom " + name + " est déjà pris par un personnage";
+				return false;
+			}
+
+			// 2. Un joueur connecté.
+			if (WorldMgr.GetClientByPlayerName(name, true, false) != null)
+			{
+				error = name + " est déjà en jeu";
+				return false;
+			}
+
+			// 3. Un faux joueur, déjà créé ou en cours de création : vérifié ET réservé sous le même verrou.
+			lock (_lock)
+			{
+				bool taken = _reserved.Contains(name)
+				             || _fakes.Any(f => f.ObjectState != GameObject.eObjectState.Deleted
+				                                && string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase));
+				if (taken)
+				{
+					error = "un faux joueur s'appelle déjà " + name;
+					return false;
+				}
+				_reserved.Add(name);
+			}
+
+			error = null;
+			return true;
+		}
 
 		/// <summary>Libère le numéro de session d'un faux client dont la création a échoué.</summary>
 		private static void ReleaseClient(FakeGameClient client)
