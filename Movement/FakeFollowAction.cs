@@ -130,7 +130,11 @@ namespace DOL.GS.Scripts.FakePlayers
 					return 0;
 				}
 
-				if (Update(fake, owner, state))
+				// Verrou avec la sauvegarde (voir FakeGamePlayer.SaveIntoDatabase).
+				bool moved;
+				lock (fake.SaveLock)
+					moved = Update(fake, owner, state);
+				if (moved)
 					FakePositionSender.SendNow(fake);
 			}
 			catch (Exception ex)
@@ -163,6 +167,10 @@ namespace DOL.GS.Scripts.FakePlayers
 
 			// --- Incantation en cours : on ne bouge pas (bouger l'interromprait) et on ne change pas de cible.
 			if (fake.IsCasting)
+				return Stop(fake, state);
+
+			// --- Échange en cours avec le propriétaire : l'alt ne bouge pas et accepte après lui (Combat/FakeTrade).
+			if (FakeTrade.Update(fake, owner))
 				return Stop(fake, state);
 
 			// --- Résurrection du propriétaire, combat fini (voir Combat/FakeRez).

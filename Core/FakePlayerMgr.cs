@@ -5,7 +5,7 @@
  * Toutes les autres classes passent par lui (la commande /fake n'appelle que FakePlayerMgr).
  *
  * Un "alt" est un personnage déjà créé sur le compte du joueur, chargé depuis la base de données
- * et piloté par le serveur. Il est FIGÉ : rien n'est jamais sauvegardé (voir FakeGamePlayer).
+ * et piloté par le serveur. Il est sauvegardé comme un joueur, à sa position d'origine (voir FakeGamePlayer).
  *
  * Appel d'un alt, étape par étape (méthode Call) :
  *   1. vérifier les règles (son compte, son royaume, pas déjà en jeu, place dans le groupe) ;
@@ -77,7 +77,9 @@ namespace DOL.GS.Scripts.FakePlayers
 			if (dbChar == null)
 				return null;
 
-			// --- 2. Position : à côté du joueur. Modifié en mémoire seulement (l'alt n'est jamais sauvegardé).
+			// --- 2. Position : à côté du joueur. La position d'origine est gardée : c'est elle qui sera
+			// sauvegardée (voir FakeGamePlayer.SaveIntoDatabase).
+			var home = (dbChar.Region, dbChar.Xpos, dbChar.Ypos, dbChar.Zpos, dbChar.Direction);
 			dbChar.Region = owner.CurrentRegionID;
 			dbChar.Xpos = owner.Position.X;
 			dbChar.Ypos = owner.Position.Y;
@@ -109,6 +111,7 @@ namespace DOL.GS.Scripts.FakePlayers
 					EmergencyThreshold = settings.EmergencyThreshold,
 					BuffMode = settings.BuffMode,
 					AggroPercent = settings.AggroPercent,
+					HomePosition = home,
 				};
 				client.Player = fake;
 				client.ClientState = GameClient.eClientState.Playing; // le serveur le considère "en jeu"
@@ -198,6 +201,9 @@ namespace DOL.GS.Scripts.FakePlayers
 
 			try
 			{
+				// Sauvegarde sa progression (niveau, expérience, argent, inventaire...) avant de le retirer.
+				fake.SaveIntoDatabase();
+
 				// Arrête le timer de position (il teste cet état à chaque passage).
 				fake.Client.ClientState = GameClient.eClientState.Disconnected;
 
@@ -280,7 +286,7 @@ namespace DOL.GS.Scripts.FakePlayers
 		/// Supprime puis rappelle un alt à côté de son propriétaire, en arrière-plan.
 		/// Utilisé quand le propriétaire change de région : un faux client ne peut pas faire
 		/// le changement de région d'un vrai joueur (le serveur attend une confirmation du jeu).
-		/// L'alt étant figé et rechargé depuis la base, il ne perd rien.
+		/// L'alt est sauvegardé au retrait puis rechargé depuis la base : il ne perd rien.
 		/// Ses ordres (stay/follow, passive/fight) sont gardés.
 		/// </summary>
 		public static void Recall(FakeGamePlayer fake)
