@@ -127,5 +127,23 @@ namespace DOL.GS.Scripts.FakePlayers
 			get => m_aggroPercent;
 			set { Dirty = true; m_aggroPercent = value; }
 		}
+
+		// ----------------------------------------------------------------- sorts de zone
+
+		/// <summary>AoeMinTargets à partir duquel l'alt ne lance jamais de sort de zone.</summary>
+		public const int AOE_NEVER = 99;
+
+		private int m_aoeMinTargets;
+
+		/// <summary>
+		/// Nombre minimum de mobs (qui se battent déjà contre le groupe) dans la zone pour lancer un sort de zone.
+		/// 0 = défaut (3), 99 = jamais de sort de zone. Voir Combat/FakeDamage.
+		/// </summary>
+		[DataElement(AllowDbNull = false)]
+		public int AoeMinTargets
+		{
+			get => m_aoeMinTargets;
+			set { Dirty = true; m_aoeMinTargets = value; }
+		}
 	}
 }

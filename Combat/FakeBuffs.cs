@@ -93,7 +93,7 @@ namespace DOL.GS.Scripts.FakePlayers
 			return false;
 		}
 
-		// ================================================================= classement (aussi pour /fake spells)
+		// ================================================================= classement (aussi pour /fake admin spells)
 
 		/// <summary>
 		/// Classe un sort pour les buffs.
@@ -103,6 +103,8 @@ namespace DOL.GS.Scripts.FakePlayers
 		public static string Classify(Spell spell, out bool isBuff)
 		{
 			isBuff = false;
+			if (FakePets.IsSummon(spell))
+				return "écarté : invocation (voir les pets)";
 			if (!spell.IsBuff || spell.IsHealing)
 				return "écarté : pas un buff";
 			if (spell.NeedInstrument)

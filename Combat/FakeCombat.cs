@@ -9,7 +9,8 @@
  *
  * Choix de la cible, par priorité :
  *   0. l'ORDRE du propriétaire (/fake attack) : passe avant tout, même si l'alt combat déjà ;
- *   1. ce qui attaque l'alt lui-même (il se défend) ;
+ *   1. ce qui attaque l'alt lui-même (il se défend), puis ce qui attaque son pet ;
+ *   1b. ce qui frappe le membre qu'il protège avec Guard (voir Combat/FakeGuard) ;
  *   2. ce qui attaque le propriétaire (il le défend) ;
  *   3. ce qui attaque un autre membre du groupe (autre alt, autre joueur), le plus proche d'abord ;
  *   4. sa cible actuelle, tant qu'elle s'en prend au groupe.
@@ -86,9 +87,27 @@ namespace DOL.GS.Scripts.FakePlayers
 			if (target != null)
 				return target;
 
+			// 1a. Ce qui attaque son pet : il le défend (voir Combat/FakePets).
+			GameNPC pet = FakePets.MainPet(fake);
+			if (pet != null)
+			{
+				target = FirstValid(fake, owner, pet.Attackers);
+				if (target != null)
+					return target;
+			}
+
 			// En stay, ou soigneur en mode sorts (pas de dégâts) : uniquement la défense personnelle.
 			if (!fake.IsFollowing || !(fake.CombatMode == FakePlayerClass.MODE_MELEE || FakeDamage.IsNuker(fake)))
 				return null;
+
+			// 1b. Ce qui frappe son protégé (Guard) : en allant sur eux, il reste près de lui et le Guard joue.
+			GameLiving guarded = FakeGuard.CurrentTarget(fake);
+			if (guarded != null)
+			{
+				target = FirstValid(fake, owner, guarded.Attackers);
+				if (target != null)
+					return target;
+			}
 
 			// 2. Ce qui attaque le propriétaire.
 			target = FirstValid(fake, owner, owner.Attackers);
@@ -117,6 +136,9 @@ namespace DOL.GS.Scripts.FakePlayers
 		/// <returns>true si la position a changé (il faut l'envoyer aux joueurs proches).</returns>
 		internal static bool Fight(FakeGamePlayer fake, GameLiving target, FakeFollowAction.FollowState state)
 		{
+			// Le pet principal attaque la même cible (voir Combat/FakePets).
+			FakePets.Assist(fake, target);
+
 			if (FakeDamage.IsNuker(fake))
 				return FakeDamage.Fight(fake, target, state);
 			return Melee(fake, target, state);
@@ -171,6 +193,7 @@ namespace DOL.GS.Scripts.FakePlayers
 		/// <summary>Fin du combat : l'alt arrête d'attaquer et oublie sa cible (et l'ordre en cours).</summary>
 		public static void EndFight(FakeGamePlayer fake)
 		{
+			FakePets.Recall(fake); // le pet revient près de l'alt
 			fake.OrderedTarget = null;
 			if (fake.AttackState)
 				fake.StopAttack();
@@ -245,8 +268,25 @@ namespace DOL.GS.Scripts.FakePlayers
 			return GameServer.ServerRules.IsAllowedToAttack(fake, living, true);
 		}
 
+		/// <summary>
+		/// true si ce mob se bat déjà contre le groupe : il vise un membre du groupe, ou un membre du groupe
+		/// est dans sa liste d'aggro. Utilisé pour les sorts de zone (Combat/FakeDamage).
+		/// </summary>
+		internal static bool IsEngagedWithGroup(GamePlayer owner, GameNPC npc)
+		{
+			if (npc.TargetObject is GameLiving victim && IsGroupMember(owner, victim))
+				return true;
+			if (npc.Brain is not DOL.AI.Brain.IOldAggressiveBrain brain)
+				return false;
+
+			IEnumerable<GameLiving> members = owner.Group != null
+				? owner.Group.GetMembersInTheGroup()
+				: new GameLiving[] { owner }.Concat(FakePlayerMgr.GetFakesOf(owner));
+			return members.Any(m => m != null && brain.GetAggroAmountForLiving(m) > 0);
+		}
+
 		/// <summary>true si c'est le propriétaire, un de ses alts ou un membre de son groupe.</summary>
-		private static bool IsGroupMember(GamePlayer owner, GameLiving living)
+		internal static bool IsGroupMember(GamePlayer owner, GameLiving living)
 		{
 			if (living == owner)
 				return true;

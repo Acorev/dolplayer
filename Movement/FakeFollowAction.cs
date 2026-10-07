@@ -17,7 +17,7 @@
  *
  * Hauteur (Z) : pour un joueur, le jeu affiche exactement la hauteur envoyée par le serveur
  * (il ne "pose" pas le personnage au sol comme il le fait pour un mob). Or :
- *   - la surface du navmesh est un peu au-dessus du sol (mesuré avec /fake nav : environ +8) ;
+ *   - la surface du navmesh est un peu au-dessus du sol (mesuré avec /fake admin nav : environ +8) ;
  *   - le navmesh ne donne un point qu'aux changements de direction : entre deux points éloignés,
  *     la ligne droite passe au-dessus des creux du terrain.
  * Donc le chemin est "resserré" (un point tous les DENSIFY_STEP), chaque point est recalé sur la
@@ -158,6 +158,9 @@ namespace DOL.GS.Scripts.FakePlayers
 			// --- Aggro : corrections en attente selon le pourcentage de sa classe (voir Combat/FakeAggro).
 			FakeAggro.Flush(fake);
 
+			// --- Guard : protège le membre choisi, ou le soigneur du groupe (voir Combat/FakeGuard).
+			FakeGuard.Update(fake, owner);
+
 			// --- Mort : on ne bouge plus et on ne combat plus.
 			if (!fake.IsAlive)
 			{
@@ -180,6 +183,10 @@ namespace DOL.GS.Scripts.FakePlayers
 			// --- Soins d'abord (voir Combat/FakeHeals) : soigner passe avant tout le reste.
 			if (FakeHeals.Update(fake, owner, state, out bool healMoved))
 				return healMoved;
+
+			// --- Pet principal : invoqué s'il manque (voir Combat/FakePets).
+			if (FakePets.Update(fake, owner, state, out bool petMoved))
+				return petMoved;
 
 			// --- Chants ensuite (voir Combat/FakeChants) : garder les bons chants actifs.
 			if (FakeChants.Update(fake, owner, state, out bool chantMoved))

@@ -13,8 +13,19 @@
  * du groupe...), mais restent À DISTANCE : ils s'approchent jusqu'à la portée du sort, jamais au contact.
  *
  * Sorts retenus : dégâts directs, bolts, drains de vie, dégâts sur la durée (relancés seulement si la cible
- * ne les a plus). Écartés pour l'instant : contrôles (mez, stun, root), sorts de zone, debuffs, sorts focus.
- * Choix : un dégât sur la durée si la cible ne l'a pas, sinon le sort direct prêt qui fait le plus de dégâts.
+ * ne les a plus), et SORTS DE ZONE. Écartés pour l'instant : contrôles (mez, stun, root), debuffs,
+ * sorts pulsés, sorts focus.
+ * Choix, dans l'ordre :
+ *   0. une invocation de combat (élémentaires du Theurgist, champignons de l'Animist), dans la limite
+ *      du serveur (voir Combat/FakePets) ;
+ *   1. un sort de zone, si la zone est "sûre" (voir AoeIsSafe) : au moins AoeMinTargets mobs (table
+ *      FakePlayerClass, défaut 3) qui se battent déjà contre le groupe dans le rayon, et AUCUN autre mob
+ *      attaquable dans le rayon (sinon on ramènerait des adds) ;
+ *        - zone ciblée : centrée sur la cible (l'alt s'approche à portée, comme pour un sort simple) ;
+ *        - zone autour du lanceur (PBAoE) : centrée sur l'alt. Il ne va JAMAIS se placer au milieu des mobs :
+ *          il ne la lance que si les mobs sont déjà venus sur lui ;
+ *   2. un dégât sur la durée si la cible ne l'a pas ;
+ *   3. le sort direct prêt qui fait le plus de dégâts.
  * Mana : pas de réserve. À court de mana (ou sans sort prêt), l'alt reste en retrait et ne frappe au corps
  * à corps que si la cible est sur lui.
  */
@@ -30,8 +41,17 @@ namespace DOL.GS.Scripts.FakePlayers
 	/// </summary>
 	public static class FakeDamage
 	{
+		/// <summary>Genre de sort de dégâts.</summary>
+		private enum Kind { Single, OverTime, Area, PointBlank, Summon }
+
 		/// <summary>Un sort de dégâts retenu.</summary>
-		private record DamageSpell(Spell Spell, SpellLine Line, bool IsOverTime);
+		private record DamageSpell(Spell Spell, SpellLine Line, Kind Kind);
+
+		/// <summary>
+		/// Marge ajoutée au rayon pour chercher des mobs extérieurs : le rayon réel peut être un peu plus grand
+		/// (bonus), et un mob en bordure qui se déplace serait touché.
+		/// </summary>
+		private const int AOE_SAFETY_MARGIN = 50;
 
 		/// <summary>Types de sorts de dégâts pris en charge (en majuscules).</summary>
 		private static readonly HashSet<string> DIRECT_TYPES = new() { "DIRECTDAMAGE", "BOLT", "LIFEDRAIN", "DIRECTDAMAGEWITHDEBUFF" };
@@ -73,74 +93,161 @@ namespace DOL.GS.Scripts.FakePlayers
 			if (fake.AttackState)
 				fake.StopAttack();
 
-			FakeSpellCast.TryCast(fake, state, spell.Spell, spell.Line, target, "dégâts", out bool moved);
+			// Zone autour du lanceur : lancée sur place (le serveur la centre sur l'alt).
+			// Invocation sans portée : lancée sur place aussi.
+			GameLiving castOn = spell.Kind == Kind.PointBlank || (spell.Kind == Kind.Summon && spell.Spell.Range <= 0)
+				? fake : target;
+
+			// Invocation au sol (champignons de l'Animist) : la cible au sol est posée sur la cible.
+			if (spell.Kind == Kind.Summon)
+				FakePets.PrepareGroundTarget(fake, spell.Spell, target);
+			FakeSpellCast.TryCast(fake, state, spell.Spell, spell.Line, castOn,
+				spell.Kind is Kind.Area or Kind.PointBlank ? "dégâts de zone" : "dégâts", out bool moved);
 			return moved;
 		}
 
-		// ================================================================= classement (aussi pour /fake spells)
+		// ================================================================= classement (aussi pour /fake admin spells)
 
 		/// <summary>
 		/// Classe un sort pour les dégâts.
 		/// </summary>
 		/// <param name="isDamage">true si l'alt peut s'en servir comme sort de dégâts.</param>
-		/// <returns>Le verdict en clair : "dégâts", "dégâts sur la durée" ou la raison de l'écart.</returns>
+		/// <returns>Le verdict en clair : "dégâts", "dégâts sur la durée", "dégâts de zone",
+		/// "dégâts de zone autour du lanceur" ou la raison de l'écart.</returns>
 		public static string Classify(Spell spell, out bool isDamage)
 		{
-			isDamage = false;
+			Kind? kind = KindOf(spell, out string verdict);
+			isDamage = kind != null;
+			return verdict;
+		}
+
+		// ================================================================= outils internes
+
+		/// <summary>Le genre d'un sort de dégâts, ou null s'il est écarté (la raison est dans verdict).</summary>
+		private static Kind? KindOf(Spell spell, out string verdict)
+		{
 			string type = (spell.SpellType ?? "").ToUpperInvariant();
 			string target = (spell.Target ?? "").ToLowerInvariant();
+
+			// Invocations de combat (Theurgist, Animist) : voir Combat/FakePets.
+			if (FakePets.IsCombatSummon(spell))
+			{
+				verdict = "invocation de combat";
+				return Kind.Summon;
+			}
 
 			bool direct = DIRECT_TYPES.Contains(type);
 			bool overTime = OVER_TIME_TYPES.Contains(type);
 			if (!direct && !overTime)
-				return target == "enemy" ? "écarté : sort offensif non pris en charge (" + spell.SpellType + ")" : "écarté : pas un sort de dégâts";
+			{
+				verdict = target == "enemy" ? "écarté : sort offensif non pris en charge (" + spell.SpellType + ")" : "écarté : pas un sort de dégâts";
+				return null;
+			}
 
 			if (target != "enemy")
-				return "écarté : cible \"" + spell.Target + "\" non prise en charge";
-			if (spell.Radius > 0)
-				return "écarté : sort de zone";
-			if (spell.Range <= 0)
-				return "écarté : sort de zone autour du lanceur";
-			if (spell.IsPulsing || (spell.Frequency > 0 && !overTime))
-				return "écarté : sort pulsé";
-			if (spell.IsFocus)
-				return "écarté : sort focus (à maintenir)";
-			if (spell.NeedInstrument)
-				return "écarté : demande un instrument";
-
-			isDamage = true;
-			return overTime ? "dégâts sur la durée" : "dégâts";
+				verdict = "écarté : cible \"" + spell.Target + "\" non prise en charge";
+			else if (spell.IsPulsing || (spell.Frequency > 0 && !overTime))
+				verdict = "écarté : sort pulsé";
+			else if (spell.IsFocus)
+				verdict = "écarté : sort focus (à maintenir)";
+			else if (spell.NeedInstrument)
+				verdict = "écarté : demande un instrument";
+			else if (spell.Radius > 0 && spell.Range <= 0)
+			{
+				verdict = "dégâts de zone autour du lanceur";
+				return Kind.PointBlank;
+			}
+			else if (spell.Radius > 0)
+			{
+				verdict = "dégâts de zone";
+				return Kind.Area;
+			}
+			else if (spell.Range <= 0)
+				verdict = "écarté : sort sans portée";
+			else
+			{
+				verdict = overTime ? "dégâts sur la durée" : "dégâts";
+				return overTime ? Kind.OverTime : Kind.Single;
+			}
+			return null;
 		}
 
 		// ================================================================= outils internes
 
 		/// <summary>
-		/// Le sort à lancer : un dégât sur la durée si la cible ne l'a pas, sinon le sort direct prêt
-		/// qui fait le plus de dégâts. null si rien n'est prêt.
+		/// Le sort à lancer : un sort de zone si la zone est sûre, sinon un dégât sur la durée si la cible
+		/// ne l'a pas, sinon le sort direct prêt qui fait le plus de dégâts. null si rien n'est prêt.
 		/// </summary>
 		private static DamageSpell ChooseSpell(FakeGamePlayer fake, GameLiving target)
 		{
 			List<DamageSpell> ready = KnownDamage(fake).Where(d => FakeSpellCast.IsReady(fake, d.Spell)).ToList();
 
-			DamageSpell dot = ready.Where(d => d.IsOverTime && SpellHandler.FindEffectOnTarget(target, d.Spell.SpellType) == null)
+			// 0. Invocation de combat (Theurgist, Animist), tant que la limite du serveur n'est pas atteinte.
+			DamageSpell summon = ready.Where(d => d.Kind == Kind.Summon && FakePets.CombatSummonAllowed(fake, d.Spell))
+			                          .OrderByDescending(d => d.Spell.Level).FirstOrDefault();
+			if (summon != null)
+				return summon;
+
+			// 1. Zone, la plus forte d'abord, si elle est sûre (sur la cible, ou autour de l'alt pour un PBAoE).
+			foreach (DamageSpell area in ready.Where(d => d.Kind is Kind.Area or Kind.PointBlank)
+			                                  .OrderByDescending(d => d.Spell.Damage))
+			{
+				GameObject center = area.Kind == Kind.PointBlank ? fake : target;
+				if (AoeIsSafe(fake, center, area.Spell.Radius))
+					return area;
+			}
+
+			// 2. Dégât sur la durée que la cible n'a pas encore.
+			DamageSpell dot = ready.Where(d => d.Kind == Kind.OverTime && SpellHandler.FindEffectOnTarget(target, d.Spell.SpellType) == null)
 			                       .OrderByDescending(d => d.Spell.Damage).FirstOrDefault();
 			if (dot != null)
 				return dot;
 
-			return ready.Where(d => !d.IsOverTime)
+			// 3. Le sort direct le plus fort.
+			return ready.Where(d => d.Kind == Kind.Single)
 			            .OrderByDescending(d => d.Spell.Damage).ThenByDescending(d => d.Spell.Level)
 			            .FirstOrDefault();
 		}
 
-		/// <summary>Les sorts de dégâts que l'alt peut utiliser (voir Classify).</summary>
+		/// <summary>
+		/// true si une zone de ce rayon autour de "center" est sûre :
+		///  - au moins AoeMinTargets mobs qui se battent déjà contre le groupe dans le rayon ;
+		///  - AUCUN autre mob attaquable dans le rayon (+ marge) : il deviendrait un add.
+		/// </summary>
+		private static bool AoeIsSafe(FakeGamePlayer fake, GameObject center, int radius)
+		{
+			GamePlayer owner = fake.Owner;
+			if (owner == null || radius <= 0 || fake.AoeMinTargets <= 0)
+				return false;
+
+			int engaged = 0;
+			ushort searchRadius = (ushort)System.Math.Min(ushort.MaxValue, radius + AOE_SAFETY_MARGIN);
+			foreach (GameNPC npc in center.GetNPCsInRadius(searchRadius).OfType<GameNPC>())
+			{
+				if (!npc.IsAlive || npc.ObjectState != GameObject.eObjectState.Active)
+					continue;
+				// Ce que le sort ne peut pas toucher (PNJ pacifiques, gardes de son royaume...) ne compte pas.
+				if (!GameServer.ServerRules.IsAllowedToAttack(fake, npc, true))
+					continue;
+
+				if (!FakeCombat.IsEngagedWithGroup(owner, npc))
+					return false; // un mob extérieur serait touché : add
+
+				if (center.IsWithinRadius(npc, radius))
+					engaged++;
+			}
+			return engaged >= fake.AoeMinTargets;
+		}
+
+		/// <summary>Les sorts de dégâts que l'alt peut utiliser (voir KindOf).</summary>
 		private static List<DamageSpell> KnownDamage(FakeGamePlayer fake)
 		{
 			var result = new List<DamageSpell>();
 			foreach (FakeSpellCast.KnownSpell known in FakeSpellCast.KnownSpells(fake))
 			{
-				string verdict = Classify(known.Spell, out bool isDamage);
-				if (isDamage)
-					result.Add(new DamageSpell(known.Spell, known.Line, verdict == "dégâts sur la durée"));
+				Kind? kind = KindOf(known.Spell, out _);
+				if (kind != null)
+					result.Add(new DamageSpell(known.Spell, known.Line, kind.Value));
 			}
 			return result;
 		}

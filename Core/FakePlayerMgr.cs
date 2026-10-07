@@ -111,6 +111,7 @@ namespace DOL.GS.Scripts.FakePlayers
 					EmergencyThreshold = settings.EmergencyThreshold,
 					BuffMode = settings.BuffMode,
 					AggroPercent = settings.AggroPercent,
+					AoeMinTargets = settings.AoeMinTargets,
 					HomePosition = home,
 				};
 				client.Player = fake;
@@ -206,6 +207,10 @@ namespace DOL.GS.Scripts.FakePlayers
 
 				// Arrête le timer de position (il teste cet état à chaque passage).
 				fake.Client.ClientState = GameClient.eClientState.Disconnected;
+
+				// Retire son Guard (sinon l'effet resterait sur le protégé) et renvoie son pet.
+				FakeGuard.Cancel(fake);
+				FakePets.Release(fake);
 
 				// Sortir du groupe AVANT de quitter le monde, pour que la fenêtre de groupe se mette à jour.
 				fake.Group?.RemoveMember(fake);

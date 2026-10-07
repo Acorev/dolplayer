@@ -149,7 +149,8 @@ namespace DOL.GS.Scripts.FakePlayers
 		///  - HealMode 0 : soigneur si CombatMode 2, urgence seulement si CombatMode 1 ;
 		///  - seuils 0 (ou hors 1..99) : valeurs par défaut ;
 		///  - BuffMode 0 (ou invalide) : buffe le groupe ;
-		///  - AggroPercent 0 (ou hors 1..AGGRO_MAX) : valeur par défaut de la classe.
+		///  - AggroPercent 0 (ou hors 1..AGGRO_MAX) : valeur par défaut de la classe ;
+		///  - AoeMinTargets 0 : 3 mobs ; 99 et plus : jamais de sort de zone (0 dans les réglages).
 		/// </summary>
 		public static FakeClassSettings GetSettings(int classId)
 		{
@@ -183,8 +184,16 @@ namespace DOL.GS.Scripts.FakePlayers
 				buffMode,
 				row != null && row.AggroPercent >= 1 && row.AggroPercent <= FakePlayerClass.AGGRO_MAX
 					? row.AggroPercent
-					: DefaultAggro(classId));
+					: DefaultAggro(classId),
+				AoeMin(row?.AoeMinTargets ?? 0));
 		}
+
+		/// <summary>Nombre minimum de mobs pour un sort de zone, si la colonne vaut 0.</summary>
+		public const int DEFAULT_AOE_MIN_TARGETS = 3;
+
+		/// <summary>AoeMinTargets résolu : 0 (ou négatif) = défaut, 99 et plus = jamais (renvoie 0).</summary>
+		private static int AoeMin(int value)
+			=> value <= 0 ? DEFAULT_AOE_MIN_TARGETS : value >= FakePlayerClass.AOE_NEVER ? 0 : value;
 
 		/// <summary>Un pourcentage valide (1 à 99), sinon la valeur par défaut.</summary>
 		private static int Percent(int value, int fallback)
@@ -198,6 +207,7 @@ namespace DOL.GS.Scripts.FakePlayers
 	/// <param name="EmergencyThreshold">% de vie d'un soin d'urgence.</param>
 	/// <param name="BuffMode">FakePlayerClass.BUFF_GROUP, BUFF_NEVER ou BUFF_SELF.</param>
 	/// <param name="AggroPercent">Aggro générée, en % de l'aggro normale (1 à AGGRO_MAX).</param>
+	/// <param name="AoeMinTargets">Mobs minimum pour un sort de zone (0 = jamais de sort de zone).</param>
 	public record FakeClassSettings(int CombatMode, int HealMode, int HealThreshold, int EmergencyThreshold, int BuffMode,
-		int AggroPercent);
+		int AggroPercent, int AoeMinTargets);
 }

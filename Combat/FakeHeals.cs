@@ -61,7 +61,7 @@ namespace DOL.GS.Scripts.FakePlayers
 			List<HealSpell> heals = KnownHeals(fake);
 			if (heals.Count == 0)
 			{
-				FakeSpellCast.Trace(fake, "soin : aucun sort de soin connu (niveau " + fake.Level + ", voir /fake spells)");
+				FakeSpellCast.Trace(fake, "soin : aucun sort de soin connu (niveau " + fake.Level + ", voir /fake admin spells)");
 				return false;
 			}
 
@@ -98,7 +98,7 @@ namespace DOL.GS.Scripts.FakePlayers
 			       != FakeSpellCast.Result.Failed;
 		}
 
-		// ================================================================= classement (aussi pour /fake spells)
+		// ================================================================= classement (aussi pour /fake admin spells)
 
 		/// <summary>
 		/// Classe un sort pour les soins.

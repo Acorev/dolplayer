@@ -62,6 +62,9 @@ namespace DOL.GS.Scripts.FakePlayers
 		/// <summary>Aggro qu'il génère, en % de l'aggro normale (table FakePlayerClass). Voir Combat/FakeAggro.</summary>
 		public int AggroPercent { get; set; } = 100;
 
+		/// <summary>Mobs minimum pour lancer un sort de zone (table FakePlayerClass ; 0 = jamais). Voir Combat/FakeDamage.</summary>
+		public int AoeMinTargets { get; set; } = FakeClassModes.DEFAULT_AOE_MIN_TARGETS;
+
 		/// <summary>
 		/// Niveau auquel sa liste de sorts a été lue pour la dernière fois (-1 = jamais).
 		/// Quand il monte de niveau, la liste est relue (voir Combat/FakeSpellCast.KnownSpells).
@@ -80,6 +83,18 @@ namespace DOL.GS.Scripts.FakePlayers
 		/// avec /fake passive ou un nouvel ordre. Voir Combat/FakeCombat.
 		/// </summary>
 		public GameLiving OrderedTarget { get; set; }
+
+		/// <summary>
+		/// Guard : le membre choisi par le propriétaire avec /fake guard (null = choix automatique).
+		/// Pas sauvegardé. Voir Combat/FakeGuard.
+		/// </summary>
+		public GameLiving GuardChoice { get; set; }
+
+		/// <summary>La cible sur laquelle l'alt a envoyé son pet (null = aucune). Voir Combat/FakePets.</summary>
+		public GameLiving PetOrderedTarget { get; set; }
+
+		/// <summary>Guard désactivé par le propriétaire (/fake guard &lt;alt&gt; off). Pas sauvegardé.</summary>
+		public bool GuardDisabled { get; set; }
 
 		// ================================================================= échange (voir Combat/FakeTrade)
 

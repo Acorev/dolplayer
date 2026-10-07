@@ -26,23 +26,24 @@ namespace DOL.GS.Scripts.FakePlayers
 		"/fake team add <personnage> - ajoute un personnage à l'équipe de ce personnage-ci",
 		"/fake team remove <personnage> - retire un personnage de l'équipe",
 		"/fake team list - affiche l'équipe",
-		"/fake list - liste les alts en jeu",
-		"/fake remove - supprime l'alt sélectionné (sans sélection : tous)",
-		"/fake remove <nom> - supprime un alt",
-		"/fake remove all - supprime tous les alts",
-		"/fake stay [nom] - l'alt ciblé (ou nommé, sans cible : tous les vôtres) reste sur place",
-		"/fake follow [nom] - l'alt ciblé (ou nommé, sans cible : tous les vôtres) vous suit à nouveau",
+		"/fake list - liste vos alts en jeu",
+		"/fake remove - renvoie votre alt sélectionné (sans sélection : tous vos alts)",
+		"/fake remove <nom> - renvoie un de vos alts",
+		"/fake remove all - renvoie tous vos alts",
+		"/fake stay [nom] - votre alt ciblé (ou nommé, sans cible : tous) reste sur place",
+		"/fake follow [nom] - votre alt ciblé (ou nommé, sans cible : tous) vous suit à nouveau",
 		"/fake attack [nom] - vos alts (ou l'alt nommé) attaquent votre cible, même s'ils combattent déjà (sauf soigneurs)",
-		"/fake passive [nom] - l'alt ciblé (ou nommé, sans cible : tous les vôtres) ne combat plus",
-		"/fake fight [nom] - l'alt ciblé (ou nommé, sans cible : tous les vôtres) combat à nouveau",
-		"/fake spells [nom] - diagnostic : sorts de l'alt ciblé (ou nommé), soins et buffs retenus",
-		"/fake nav - teste le navmesh à votre position (et le chemin vers votre cible)")]
+		"/fake passive [nom] - votre alt ciblé (ou nommé, sans cible : tous) ne combat plus",
+		"/fake fight [nom] - votre alt ciblé (ou nommé, sans cible : tous) combat à nouveau",
+		"/fake guard <nom> - votre alt protège (Guard) votre cible, ou vous sans cible",
+		"/fake guard <nom> off | auto - plus de Guard, ou retour au choix automatique (soigneur, sinon vous)",
+		"/fake admin - commandes d'administration (GM et plus)")]
 	public class FakePlayerCommandHandler : AbstractCommandHandler, ICommandHandler
 	{
 		/// <summary>
 		/// Appelée par le serveur à chaque /fake.
 		/// args[0] = "&amp;fake", args[1] = la sous-commande (call, team, list, remove, stay, follow,
-		/// attack, passive, fight, spells, nav),
+		/// attack, passive, fight, guard, admin),
 		/// args[2] = le paramètre éventuel.
 		/// </summary>
 		public void OnCommand(GameClient client, string[] args)
@@ -67,7 +68,7 @@ namespace DOL.GS.Scripts.FakePlayers
 					Team(client, player, args);
 					break;
 				case "list":
-					List(client);
+					List(client, FakePlayerMgr.GetFakesOf(player), false);
 					break;
 				case "remove":
 					Remove(client, player, args);
@@ -87,13 +88,11 @@ namespace DOL.GS.Scripts.FakePlayers
 				case "fight":
 					SetPassive(client, player, args, false);
 					break;
-				case "spells":
-					Spells(client, player, args);
+				case "guard":
+					Guard(client, player, args);
 					break;
-				case "nav":
-					// Diagnostic du navmesh (voir Movement/FakeNavCheck).
-					foreach (string line in FakeNavCheck.Check(player))
-						DisplayMessage(client, line);
+				case "admin":
+					Admin(client, player, args);
 					break;
 				default:
 					DisplaySyntax(client); // sous-commande inconnue : on affiche l'aide
@@ -188,35 +187,36 @@ namespace DOL.GS.Scripts.FakePlayers
 		}
 
 		/// <summary>
-		/// /fake list : affiche tous les alts en jeu, numérotés,
-		/// avec leur classe, leur niveau, leur zone et le nom de celui qui les a appelés.
+		/// Affiche une liste d'alts, numérotés, avec leur classe, leur niveau et leur zone
+		/// (et, pour l'admin, le nom de celui qui les a appelés).
 		/// </summary>
-		private void List(GameClient client)
+		private void List(GameClient client, List<FakeGamePlayer> fakes, bool showOwner)
 		{
-			List<FakeGamePlayer> fakes = FakePlayerMgr.GetFakes();
 			if (fakes.Count == 0)
 			{
-				DisplayMessage(client, "Aucun alt en jeu.");
+				DisplayMessage(client, showOwner ? "Aucun alt en jeu." : "Vous n'avez aucun alt en jeu.");
 				return;
 			}
 
-			DisplayMessage(client, "Alts en jeu ({0}) :", fakes.Count);
+			DisplayMessage(client, showOwner ? "Alts en jeu sur le serveur ({0}) :" : "Vos alts en jeu ({0}) :", fakes.Count);
 			for (int i = 0; i < fakes.Count; i++)
 			{
 				FakeGamePlayer f = fakes[i];
-				DisplayMessage(client, "  {0}. {1} ({2} niveau {3}, {4}, appelé par {5})",
+				GameLiving guarded = FakeGuard.CurrentTarget(f);
+				DisplayMessage(client, "  {0}. {1} ({2} niveau {3}, {4}{5}){6}",
 					i + 1, f.Name, f.CharacterClass.GetSalutation(f.Gender), f.Level,
-					f.CurrentZone?.Description ?? "?", f.Owner?.Name ?? "?");
+					f.CurrentZone?.Description ?? "?",
+					showOwner ? ", appelé par " + (f.Owner?.Name ?? "?") : "",
+					guarded != null ? ", garde " + guarded.Name : "");
 			}
 		}
 
 		/// <summary>
-		/// /fake remove [nom | all]
-		///  - avec un nom : supprime cet alt ;
-		///  - "all" : supprime tous les alts ;
-		///  - sans argument : supprime l'alt sélectionné,
-		///    ou tous les alts s'il n'y a aucune sélection.
-		///    Une cible qui n'est pas un alt (mob, PNJ, vrai joueur) ne supprime rien.
+		/// /fake remove [nom | all] : renvoie SES alts (jamais ceux des autres joueurs).
+		///  - avec un nom : renvoie cet alt, s'il est à lui ;
+		///  - "all" : renvoie tous ses alts ;
+		///  - sans argument : renvoie l'alt sélectionné, ou tous ses alts s'il n'y a aucune sélection.
+		///    Une cible qui n'est pas un de ses alts (mob, PNJ, vrai joueur, alt d'un autre) ne renvoie rien.
 		/// </summary>
 		private void Remove(GameClient client, GamePlayer player, string[] args)
 		{
@@ -228,39 +228,51 @@ namespace DOL.GS.Scripts.FakePlayers
 				GameObject target = player.TargetObject;
 				if (target == null)
 				{
-					RemoveAll(client);
+					RemoveList(client, FakePlayerMgr.GetFakesOf(player));
 					return;
 				}
 
-				// "as" donne null si la cible n'est pas un alt.
 				fake = target as FakeGamePlayer;
-				if (fake == null)
+				if (fake == null || fake.Owner != player)
 				{
-					DisplayMessage(client, "{0} n'est pas un alt, rien n'a été supprimé.", target.Name);
+					DisplayMessage(client, "{0} n'est pas un de vos alts, rien n'a été renvoyé.", target.Name);
 					return;
 				}
 			}
 			else if (args[2].ToLowerInvariant() == "all")
 			{
-				RemoveAll(client);
+				RemoveList(client, FakePlayerMgr.GetFakesOf(player));
 				return;
 			}
 			else
 			{
 				fake = FakePlayerMgr.FindByName(args[2]);
-				if (fake == null)
+				if (fake == null || fake.Owner != player)
 				{
-					DisplayMessage(client, "Aucun alt nommé {0} en jeu. Voir /fake list.", args[2]);
+					DisplayMessage(client, "Aucun de vos alts ne s'appelle {0}. Voir /fake list.", args[2]);
 					return;
 				}
 			}
 
+			RemoveOne(client, fake);
+		}
+
+		/// <summary>Renvoie un alt et affiche le résultat.</summary>
+		private void RemoveOne(GameClient client, FakeGamePlayer fake)
+		{
 			// Nom gardé avant la suppression, pour le message.
 			string name = fake.Name;
 			if (FakePlayerMgr.Remove(fake))
 				DisplayMessage(client, "{0} est reparti.", name);
 			else
 				DisplayMessage(client, "Erreur à la suppression de {0} (voir la console du serveur).", name);
+		}
+
+		/// <summary>Renvoie une liste d'alts et affiche combien sont repartis.</summary>
+		private void RemoveList(GameClient client, List<FakeGamePlayer> fakes)
+		{
+			int count = fakes.Count(FakePlayerMgr.Remove);
+			DisplayMessage(client, "{0} alt(s) renvoyé(s).", count);
 		}
 
 		/// <summary>
@@ -361,16 +373,16 @@ namespace DOL.GS.Scripts.FakePlayers
 		}
 
 		/// <summary>
-		/// /fake spells [nom] : diagnostic des sorts d'un alt (l'alt nommé, sinon l'alt ciblé).
+		/// /fake admin spells [nom] : diagnostic des sorts d'un alt (l'alt nommé, sinon l'alt ciblé), de n'importe quel joueur.
 		/// Affiche son niveau, ses réglages de soin, de buff et d'aggro, puis chaque sort appris avec son type, sa cible,
 		/// sa portée, sa valeur, et s'il est retenu comme soin ou buff (ou pourquoi il est écarté).
 		/// </summary>
 		private void Spells(GameClient client, GamePlayer player, string[] args)
 		{
-			FakeGamePlayer fake = args.Length >= 3 ? FakePlayerMgr.FindByName(args[2]) : player.TargetObject as FakeGamePlayer;
+			FakeGamePlayer fake = args.Length >= 4 ? FakePlayerMgr.FindByName(args[3]) : player.TargetObject as FakeGamePlayer;
 			if (fake == null)
 			{
-				DisplayMessage(client, "Usage : /fake spells <nom>, ou ciblez un alt.");
+				DisplayMessage(client, "Usage : /fake admin spells <nom>, ou ciblez un alt.");
 				return;
 			}
 
@@ -389,10 +401,11 @@ namespace DOL.GS.Scripts.FakePlayers
 				FakePlayerClass.BUFF_SELF => "lui-même",
 				_ => "le groupe",
 			};
-			DisplayMessage(client, "{0} : {1} niveau {2}, mode {3}, soins : {4}, buffs : {5}, aggro {6} %, mana {7}/{8}, concentration {9}/{10}.",
+			DisplayMessage(client, "{0} : {1} niveau {2}, mode {3}, soins : {4}, buffs : {5}, aggro {6} %, zone {11}, mana {7}/{8}, concentration {9}/{10}.",
 				fake.Name, fake.CharacterClass.GetSalutation(fake.Gender), fake.Level,
 				fake.CombatMode == FakePlayerClass.MODE_MELEE ? "mêlée" : "sorts",
-				healMode, buffMode, fake.AggroPercent, fake.Mana, fake.MaxMana, fake.Concentration, fake.MaxConcentration);
+				healMode, buffMode, fake.AggroPercent, fake.Mana, fake.MaxMana, fake.Concentration, fake.MaxConcentration,
+				fake.AoeMinTargets > 0 ? "dès " + fake.AoeMinTargets + " mobs" : "jamais");
 
 			List<FakeSpellCast.KnownSpell> spells = FakeSpellCast.KnownSpells(fake);
 			if (spells.Count == 0)
@@ -410,7 +423,11 @@ namespace DOL.GS.Scripts.FakePlayers
 					Spell s = known.Spell;
 					string verdict = FakeHeals.Classify(s, out bool isHeal, out _);
 					string chantVerdict = FakeChants.Classify(s, out bool isChant);
-					if (FakeRez.IsRez(s))
+					if (FakePets.IsSummon(s))
+					{
+						verdict = FakePets.Verdict(s);
+					}
+					else if (FakeRez.IsRez(s))
 					{
 						rez++;
 						verdict = "résurrection (de vous seulement, combat fini)";
@@ -452,6 +469,136 @@ namespace DOL.GS.Scripts.FakePlayers
 				rez);
 		}
 
+		// ================================================================= guard
+
+		/// <summary>
+		/// /fake guard &lt;nom&gt; [off | auto] : le Guard d'un de SES alts (voir Combat/FakeGuard).
+		///  - sans rien : protège la cible du joueur (un membre du groupe), ou le joueur s'il n'a pas de cible ;
+		///  - off : plus de Guard ; auto : retour au choix automatique (soigneur du groupe, sinon le joueur).
+		/// </summary>
+		private void Guard(GameClient client, GamePlayer player, string[] args)
+		{
+			if (args.Length < 3)
+			{
+				DisplayMessage(client, "Usage : /fake guard <nom> [off | auto]");
+				return;
+			}
+
+			FakeGamePlayer fake = FakePlayerMgr.FindByName(args[2]);
+			if (fake == null || fake.Owner != player)
+			{
+				DisplayMessage(client, "Aucun de vos alts ne s'appelle {0}. Voir /fake list.", args[2]);
+				return;
+			}
+			if (!FakeGuard.CanGuard(fake, out string reason))
+			{
+				DisplayMessage(client, "Impossible : {0}.", reason);
+				return;
+			}
+
+			string option = args.Length >= 4 ? args[3].ToLowerInvariant() : "";
+			if (option == "off")
+			{
+				fake.GuardDisabled = true;
+				fake.GuardChoice = null;
+				FakeGuard.Cancel(fake);
+				DisplayMessage(client, "{0} : plus de Guard.", fake.Name);
+				return;
+			}
+			if (option == "auto")
+			{
+				fake.GuardDisabled = false;
+				fake.GuardChoice = null;
+				FakeGuard.Update(fake, player);
+				GameLiving auto = FakeGuard.CurrentTarget(fake);
+				DisplayMessage(client, "{0} : Guard automatique{1}.", fake.Name, auto != null ? " (protège " + auto.Name + ")" : "");
+				return;
+			}
+
+			// Protège la cible du joueur, ou le joueur lui-même.
+			GameLiving target = player.TargetObject as GameLiving ?? player;
+			if (target == fake)
+			{
+				DisplayMessage(client, "{0} ne peut pas se protéger lui-même.", fake.Name);
+				return;
+			}
+			if (fake.Group == null || target.Group != fake.Group)
+			{
+				DisplayMessage(client, "{0} n'est pas dans votre groupe.", target.Name);
+				return;
+			}
+
+			fake.GuardDisabled = false;
+			fake.GuardChoice = target;
+			FakeGuard.Update(fake, player);
+			DisplayMessage(client, "{0} protège {1}.", fake.Name, target == player ? "vous" : target.Name);
+		}
+
+		// ================================================================= administration
+
+		/// <summary>
+		/// /fake admin ... : commandes réservées aux GM (et plus), qui agissent sur les alts de TOUS les joueurs.
+		///  - list : tous les alts en jeu, avec leur propriétaire ;
+		///  - remove &lt;nom | all&gt; : renvoie un alt (de n'importe qui) ou tous les alts du serveur ;
+		///  - spells [nom] : diagnostic des sorts d'un alt (nommé ou ciblé) ;
+		///  - nav : teste le navmesh à votre position (et le chemin vers votre cible).
+		/// </summary>
+		private void Admin(GameClient client, GamePlayer player, string[] args)
+		{
+			if (client.Account.PrivLevel <= (uint)ePrivLevel.Player)
+			{
+				DisplayMessage(client, "Commande réservée aux administrateurs.");
+				return;
+			}
+
+			string action = args.Length >= 3 ? args[2].ToLowerInvariant() : "";
+			switch (action)
+			{
+				case "list":
+					List(client, FakePlayerMgr.GetFakes(), true);
+					break;
+
+				case "remove":
+					if (args.Length < 4)
+					{
+						DisplayMessage(client, "Usage : /fake admin remove <nom | all>");
+						return;
+					}
+					if (args[3].ToLowerInvariant() == "all")
+					{
+						RemoveList(client, FakePlayerMgr.GetFakes());
+						return;
+					}
+					FakeGamePlayer fake = FakePlayerMgr.FindByName(args[3]);
+					if (fake == null)
+					{
+						DisplayMessage(client, "Aucun alt nommé {0} en jeu. Voir /fake admin list.", args[3]);
+						return;
+					}
+					RemoveOne(client, fake);
+					break;
+
+				case "spells":
+					Spells(client, player, args);
+					break;
+
+				case "nav":
+					// Diagnostic du navmesh (voir Movement/FakeNavCheck).
+					foreach (string line in FakeNavCheck.Check(player))
+						DisplayMessage(client, line);
+					break;
+
+				default:
+					DisplayMessage(client, "Commandes d'administration (agissent sur les alts de tous les joueurs) :");
+					DisplayMessage(client, "  /fake admin list - liste tous les alts en jeu, avec leur propriétaire");
+					DisplayMessage(client, "  /fake admin remove <nom> - renvoie un alt, quel que soit son propriétaire");
+					DisplayMessage(client, "  /fake admin remove all - renvoie tous les alts du serveur");
+					DisplayMessage(client, "  /fake admin spells [nom] - diagnostic : sorts de l'alt ciblé (ou nommé)");
+					DisplayMessage(client, "  /fake admin nav - teste le navmesh à votre position (et le chemin vers votre cible)");
+					break;
+			}
+		}
+
 		/// <summary>
 		/// Les alts visés par stay, follow, passive et fight :
 		///  - avec un nom (args[2]) : cet alt ;
@@ -466,18 +613,18 @@ namespace DOL.GS.Scripts.FakePlayers
 			if (args.Length >= 3)
 			{
 				FakeGamePlayer named = FakePlayerMgr.FindByName(args[2]);
-				if (named == null)
+				if (named == null || named.Owner != player)
 				{
-					DisplayMessage(client, "Aucun alt nommé {0} en jeu. Voir /fake list.", args[2]);
+					DisplayMessage(client, "Aucun de vos alts ne s'appelle {0}. Voir /fake list.", args[2]);
 					return null;
 				}
 				fakes.Add(named);
 			}
 			else if (player.TargetObject != null)
 			{
-				if (player.TargetObject is not FakeGamePlayer targeted)
+				if (player.TargetObject is not FakeGamePlayer targeted || targeted.Owner != player)
 				{
-					DisplayMessage(client, "{0} n'est pas un alt.", player.TargetObject.Name);
+					DisplayMessage(client, "{0} n'est pas un de vos alts.", player.TargetObject.Name);
 					return null;
 				}
 				fakes.Add(targeted);
@@ -495,11 +642,5 @@ namespace DOL.GS.Scripts.FakePlayers
 			return fakes;
 		}
 
-		/// <summary>Supprime tous les alts et affiche le nombre supprimé.</summary>
-		private void RemoveAll(GameClient client)
-		{
-			int count = FakePlayerMgr.RemoveAll();
-			DisplayMessage(client, "{0} alt(s) supprimé(s).", count);
-		}
 	}
 }

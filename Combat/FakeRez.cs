@@ -81,7 +81,7 @@ namespace DOL.GS.Scripts.FakePlayers
 			       != FakeSpellCast.Result.Failed;
 		}
 
-		// ================================================================= classement (aussi pour /fake spells)
+		// ================================================================= classement (aussi pour /fake admin spells)
 
 		/// <summary>true si c'est un sort de résurrection (sur un corps).</summary>
 		public static bool IsRez(Spell spell)

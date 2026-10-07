@@ -1,7 +1,7 @@
 /*
  * FakePlayers - Movement/FakeNavCheck.cs
  *
- * Outil de diagnostic pour la commande /fake nav : vérifie si le navmesh chargé par le serveur
+ * Outil de diagnostic pour la commande /fake admin nav : vérifie si le navmesh chargé par le serveur
  * correspond au terrain du jeu, à l'endroit où se trouve le joueur.
  *
  * Pourquoi : le déplacement des alts pourra s'appuyer sur le navmesh (chemins qui contournent

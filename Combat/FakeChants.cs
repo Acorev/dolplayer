@@ -128,7 +128,7 @@ namespace DOL.GS.Scripts.FakePlayers
 			   && InstrumentSlot(fake) != null
 			   && KnownChants(fake).Any(c => c.Spell.NeedInstrument);
 
-		// ================================================================= classement (aussi pour /fake spells)
+		// ================================================================= classement (aussi pour /fake admin spells)
 
 		/// <summary>
 		/// Classe un sort pour les chants.
