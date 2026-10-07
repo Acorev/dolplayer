@@ -6,8 +6,10 @@
  * toute la logique (création, suppression...) est dans FakePlayerMgr.
  */
 
+using System;
 using System.Collections.Generic;
 using DOL.GS.Commands;
+using DOL.GS.PacketHandler;
 
 namespace DOL.GS.Scripts.FakePlayers
 {
@@ -21,22 +23,16 @@ namespace DOL.GS.Scripts.FakePlayers
 		ePrivLevel.Player,
 		"Gère les faux joueurs.",
 		"/fake create <nom> - crée un faux joueur près de vous",
-		"/fake list - liste les faux joueurs du serveur",
 		"/fake remove - supprime le faux joueur sélectionné (sans sélection : tous)",
-		"/fake remove <nom> - supprime un faux joueur",
-		"/fake remove all - supprime tous les faux joueurs")]
+		"/fake list - liste les faux joueurs du serveur")]
 	public class FakePlayerCommandHandler : AbstractCommandHandler, ICommandHandler
 	{
 		/// <summary>
 		/// Appelée par le serveur à chaque /fake.
-		/// args[0] = "&amp;fake", args[1] = la sous-commande (create, list, remove), args[2] = le paramètre éventuel.
+		/// args[0] = "&amp;fake", args[1] = la sous-commande (create, list, remove).
 		/// </summary>
 		public void OnCommand(GameClient client, string[] args)
 		{
-			GamePlayer player = client?.Player;
-			if (player == null)
-				return;
-
 			// Pas de sous-commande : on affiche l'aide.
 			if (args.Length < 2)
 			{
@@ -44,20 +40,16 @@ namespace DOL.GS.Scripts.FakePlayers
 				return;
 			}
 
+			GamePlayer player = client?.Player;
+			if (player == null)
+				return;
+
 			switch (args[1].ToLowerInvariant())
 			{
-				case "create":
-					Create(client, player, args);
-					break;
-				case "list":
-					List(client);
-					break;
-				case "remove":
-					Remove(client, player, args);
-					break;
-				default:
-					DisplaySyntax(client); // sous-commande inconnue : on affiche l'aide
-					break;
+				case "create": Create(client, player, args); break;
+				case "list": List(client); break;
+				case "remove": Remove(client, player, args); break;
+				default: DisplaySyntax(client); break;
 			}
 		}
 
@@ -109,6 +101,9 @@ namespace DOL.GS.Scripts.FakePlayers
 		///  - sans argument : supprime le faux joueur sélectionné,
 		///    ou tous les faux joueurs s'il n'y a aucune sélection.
 		///    Une cible qui n'est pas un faux joueur (mob, PNJ, vrai joueur) ne supprime rien.
+		/// 
+		/// "/fake remove - supprime le faux joueur sélectionné (sans sélection : tous)",
+		/// "/fake remove <nom> - supprime un faux joueur",
 		/// </summary>
 		private void Remove(GameClient client, GamePlayer player, string[] args)
 		{
@@ -131,28 +126,13 @@ namespace DOL.GS.Scripts.FakePlayers
 					DisplayMessage(client, "{0} n'est pas un faux joueur, rien n'a été supprimé.", target.Name);
 					return;
 				}
-			}
-			else if (args[2].ToLowerInvariant() == "all")
-			{
-				RemoveAll(client);
-				return;
-			}
-			else
-			{
-				fake = FakePlayerMgr.FindByName(args[2]);
-				if (fake == null)
-				{
-					DisplayMessage(client, "Aucun faux joueur nommé {0}. Voir /fake list.", args[2]);
-					return;
-				}
-			}
 
-			// Nom gardé avant la suppression, pour le message.
-			string name = fake.Name;
-			if (FakePlayerMgr.Remove(fake))
-				DisplayMessage(client, "Faux joueur {0} supprimé.", name);
-			else
-				DisplayMessage(client, "Erreur à la suppression de {0} (voir la console du serveur).", name);
+				string name = fake.Name;
+				if (FakePlayerMgr.Remove(fake))
+					DisplayMessage(client, "Faux joueur {0} supprimé.", name);
+				else
+					DisplayMessage(client, "Erreur à la suppression de {0} (voir la console du serveur).", name);
+			}
 		}
 
 		/// <summary>Supprime tous les faux joueurs et affiche le nombre supprimé.</summary>
