@@ -245,8 +245,8 @@ namespace DOL.GS.Scripts.FakePlayers
 			lock (_lock)
 			{
 				bool taken = _reserved.Contains(name)
-				             || _fakes.Any(f => f.ObjectState != GameObject.eObjectState.Deleted
-				                                && string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase));
+							 || _fakes.Any(f => f.ObjectState != GameObject.eObjectState.Deleted
+												&& string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase));
 				if (taken)
 				{
 					error = "un faux joueur s'appelle déjà " + name;
@@ -311,7 +311,7 @@ namespace DOL.GS.Scripts.FakePlayers
 		/// </summary>
 		private static DOLCharacters BuildCharacter(GamePlayer owner, string name)
 		{
-			return new DOLCharacters
+			var ch = new DOLCharacters
 			{
 				Name = name,
 				AccountName = "fake_" + name.ToLowerInvariant(),
@@ -322,20 +322,15 @@ namespace DOL.GS.Scripts.FakePlayers
 				Level = owner.Level,
 				CreationModel = owner.Model,
 				CurrentModel = owner.Model,
-				Strength = owner.Strength,
-				Constitution = owner.Constitution,
-				Dexterity = owner.Dexterity,
-				Quickness = owner.Quickness,
-				Intelligence = owner.Intelligence,
-				Piety = owner.Piety,
-				Empathy = owner.Empathy,
-				Charisma = owner.Charisma,
+
 				Region = owner.CurrentRegionID,
 				Xpos = owner.Position.X,
 				Ypos = owner.Position.Y,
 				Zpos = owner.Position.Z,
 				Direction = owner.Position.Orientation.InHeading,
 			};
+			SetBaseStats(ch);
+			return ch;
 		}
 
 		/// <summary>
@@ -351,6 +346,49 @@ namespace DOL.GS.Scripts.FakePlayers
 				Language = owner.Client.Account.Language,
 				Characters = [dbChar],
 			};
+		}
+
+		/// <summary>
+		/// Stats de base du personnage, comme pour un vrai joueur de cette race, classe et niveau :
+		/// stats de départ de la race + 30 points de création (+10 principale, +10 secondaire, +10 tertiaire)
+		/// + gains de niveau de la classe (à partir du niveau 6, même règle que DOLSharp).
+		/// Race, Class et Level doivent déjà être remplis.
+		/// </summary>
+		private static void SetBaseStats(DOLCharacters ch)
+		{
+			if (!GlobalConstants.STARTING_STATS_DICT.TryGetValue((eRace)ch.Race, out Dictionary<eStat, int> raceStats))
+				raceStats = GlobalConstants.STARTING_STATS_DICT[eRace.Unknown];
+
+			CharacterClass cls = CharacterClass.GetClass(ch.Class);
+			var stats = new Dictionary<eStat, int>(raceStats);
+
+			void Add(eStat stat, int amount)
+			{
+				if (stat != eStat.UNDEFINED && stats.ContainsKey(stat))
+					stats[stat] += amount;
+			}
+
+			// 30 points de création.
+			Add(cls.PrimaryStat, 10);
+			Add(cls.SecondaryStat, 10);
+			Add(cls.TertiaryStat, 10);
+
+			// Gains de niveau (niveau 6 et plus).
+			for (int level = ch.Level; level > 5; level--)
+			{
+				Add(cls.PrimaryStat, 1);
+				if ((level - 6) % 2 == 0) Add(cls.SecondaryStat, 1);
+				if ((level - 6) % 3 == 0) Add(cls.TertiaryStat, 1);
+			}
+
+			ch.Strength = stats[eStat.STR];
+			ch.Constitution = stats[eStat.CON];
+			ch.Dexterity = stats[eStat.DEX];
+			ch.Quickness = stats[eStat.QUI];
+			ch.Intelligence = stats[eStat.INT];
+			ch.Piety = stats[eStat.PIE];
+			ch.Empathy = stats[eStat.EMP];
+			ch.Charisma = stats[eStat.CHR];
 		}
 	}
 }
