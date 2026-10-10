@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using DOL.Database;
 
@@ -5,21 +6,11 @@ namespace DOL.GS.Scripts
 {
     public class GameFake : DOLCharacters
     {
-        protected virtual int FakeRace => 0;
-        protected virtual int FakeGender => 0;
-        protected virtual int FakeClass => 0;
-        protected virtual int FakeModel => 0;
         public GameFake(GamePlayer player, string name)
         {
             base.Name = name;
             AccountName = "fake_" + name.ToLowerInvariant();
             Level = player.Level;
-            Realm = (int)player.Realm;
-            Race = FakeRace;
-            Gender = FakeGender;
-            Class = FakeClass;
-            CreationModel = FakeModel;
-            CurrentModel = FakeModel;
             Xpos = player.Position.X + Util.Random(-100, 100);
             Ypos = player.Position.Y + Util.Random(-100, 100);
             Zpos = player.Position.Z;
@@ -63,6 +54,24 @@ namespace DOL.GS.Scripts
             ch.Piety = stats[eStat.PIE];
             ch.Empathy = stats[eStat.EMP];
             ch.Charisma = stats[eStat.CHR];
+        }
+
+        public static void SetCharacter(DOLCharacters ch, CharacterClass Character, eRealm realm)
+        {
+            var Genre = Util.Chance(50) ? eGender.Male : eGender.Female;
+            var possibleRaces = Character.EligibleRaces.FindAll(s => s.GetModel(Genre) != eLivingModel.None);
+            if (possibleRaces.Count > 0)
+            {
+                var indexPick = Util.Random(0, possibleRaces.Count - 1);
+                var Model = (ushort)possibleRaces[indexPick].GetModel(Genre);
+
+                ch.Class = Character.ID;
+                ch.Realm = (int)realm;
+                ch.Gender = (int)Genre - 1;
+                ch.Race = indexPick;
+                ch.CreationModel = Model;
+                ch.CurrentModel = Model;
+            }
         }
     }
 }
