@@ -16,6 +16,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 using DOL.Database;
 using log4net;
 
@@ -46,7 +47,7 @@ namespace DOL.GS.Scripts.FakePlayers
 		private static readonly List<FakeGamePlayer> _fakes = new();
 
 		/// <summary>Verrou qui protège la liste _fakes.</summary>
-		private static readonly object _lock = new();
+		private static readonly Lock _lock = new();
 
 		/// <summary>
 		/// Noms en cours de création (vérifiés mais pas encore dans _fakes).
@@ -91,13 +92,11 @@ namespace DOL.GS.Scripts.FakePlayers
 			}
 		}
 
-		/// <summary>
-		/// Étapes 2 à 5 de la création, une fois le nom vérifié et réservé (voir Spawn).
-		/// </summary>
 		private static FakeGamePlayer Create(GamePlayer owner, string name, out string error)
 		{
-			// --- 2 et 3. Personnage, compte et faux client, uniquement en mémoire (rien en base)
-			DOLCharacters dbChar = BuildCharacter(owner, name);
+			// Personnage, compte et faux client, uniquement en mémoire (rien en base)
+			//DOLCharacters dbChar = new GameFake(owner, name);
+			DOLCharacters dbChar = new Armsman(owner, name);
 			var client = new FakeGameClient(BuildAccount(owner, dbChar));
 
 			// Numéro de session : nécessaire pour que le serveur traite le faux client comme un vrai.
@@ -107,7 +106,7 @@ namespace DOL.GS.Scripts.FakePlayers
 				return null;
 			}
 
-			// --- 4. Le faux joueur lui-même, ajouté au monde
+			// Le faux joueur lui-même, ajouté au monde
 			FakeGamePlayer fake;
 			try
 			{
@@ -131,7 +130,7 @@ namespace DOL.GS.Scripts.FakePlayers
 				return null;
 			}
 
-			// --- 5. Démarré seulement maintenant : le faux joueur est dans le monde, sa région est connue.
+			// Démarré seulement maintenant : le faux joueur est dans le monde, sa région est connue.
 			FakePositionSender.Start(fake);
 			lock (_lock)
 				_fakes.Add(fake);
@@ -305,35 +304,6 @@ namespace DOL.GS.Scripts.FakePlayers
 		}
 
 		/// <summary>
-		/// Fabrique le personnage du faux joueur, uniquement en mémoire (jamais écrit en base).
-		/// Tout est copié sur le propriétaire : royaume, race, classe, niveau, apparence, caractéristiques,
-		/// et position (le faux joueur apparaît là où se trouve le propriétaire).
-		/// </summary>
-		private static DOLCharacters BuildCharacter(GamePlayer owner, string name)
-		{
-			var ch = new DOLCharacters
-			{
-				Name = name,
-				AccountName = "fake_" + name.ToLowerInvariant(),
-				Realm = (int)owner.Realm,
-				Race = owner.Race,
-				Gender = (int)owner.Gender,
-				Class = owner.CharacterClass.ID,
-				Level = owner.Level,
-				CreationModel = owner.Model,
-				CurrentModel = owner.Model,
-
-				Region = owner.CurrentRegionID,
-				Xpos = owner.Position.X,
-				Ypos = owner.Position.Y,
-				Zpos = owner.Position.Z,
-				Direction = owner.Position.Orientation.InHeading,
-			};
-			SetBaseStats(ch);
-			return ch;
-		}
-
-		/// <summary>
 		/// Fabrique le compte du faux joueur, uniquement en mémoire.
 		/// Niveau de droits "joueur" et même langue que le propriétaire.
 		/// </summary>
@@ -346,49 +316,6 @@ namespace DOL.GS.Scripts.FakePlayers
 				Language = owner.Client.Account.Language,
 				Characters = [dbChar],
 			};
-		}
-
-		/// <summary>
-		/// Stats de base du personnage, comme pour un vrai joueur de cette race, classe et niveau :
-		/// stats de départ de la race + 30 points de création (+10 principale, +10 secondaire, +10 tertiaire)
-		/// + gains de niveau de la classe (à partir du niveau 6, même règle que DOLSharp).
-		/// Race, Class et Level doivent déjà être remplis.
-		/// </summary>
-		private static void SetBaseStats(DOLCharacters ch)
-		{
-			if (!GlobalConstants.STARTING_STATS_DICT.TryGetValue((eRace)ch.Race, out Dictionary<eStat, int> raceStats))
-				raceStats = GlobalConstants.STARTING_STATS_DICT[eRace.Unknown];
-
-			CharacterClass cls = CharacterClass.GetClass(ch.Class);
-			var stats = new Dictionary<eStat, int>(raceStats);
-
-			void Add(eStat stat, int amount)
-			{
-				if (stat != eStat.UNDEFINED && stats.ContainsKey(stat))
-					stats[stat] += amount;
-			}
-
-			// 30 points de création.
-			Add(cls.PrimaryStat, 10);
-			Add(cls.SecondaryStat, 10);
-			Add(cls.TertiaryStat, 10);
-
-			// Gains de niveau (niveau 6 et plus).
-			for (int level = ch.Level; level > 5; level--)
-			{
-				Add(cls.PrimaryStat, 1);
-				if ((level - 6) % 2 == 0) Add(cls.SecondaryStat, 1);
-				if ((level - 6) % 3 == 0) Add(cls.TertiaryStat, 1);
-			}
-
-			ch.Strength = stats[eStat.STR];
-			ch.Constitution = stats[eStat.CON];
-			ch.Dexterity = stats[eStat.DEX];
-			ch.Quickness = stats[eStat.QUI];
-			ch.Intelligence = stats[eStat.INT];
-			ch.Piety = stats[eStat.PIE];
-			ch.Empathy = stats[eStat.EMP];
-			ch.Charisma = stats[eStat.CHR];
 		}
 	}
 }

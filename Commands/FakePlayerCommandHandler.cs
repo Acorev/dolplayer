@@ -6,10 +6,8 @@
  * toute la logique (création, suppression...) est dans FakePlayerMgr.
  */
 
-using System;
 using System.Collections.Generic;
 using DOL.GS.Commands;
-using DOL.GS.PacketHandler;
 
 namespace DOL.GS.Scripts.FakePlayers
 {
