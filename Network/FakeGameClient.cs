@@ -12,7 +12,7 @@ using System;
 using DOL.Database;
 using DOL.GS.PacketHandler;
 
-namespace DOL.GS.Scripts.FakePlayers
+namespace DOL.GS.Scripts
 {
 	/// <summary>
 	/// Le client du faux joueur : aucune connexion réseau, tous les paquets envoyés sont ignorés.

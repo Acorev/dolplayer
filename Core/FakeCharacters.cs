@@ -1,14 +1,13 @@
-using System;
 using System.Collections.Generic;
 using DOL.Database;
 
 namespace DOL.GS.Scripts
 {
-    public class GameFake : DOLCharacters
+    public class FakeCharacters : DOLCharacters
     {
-        public GameFake(GamePlayer player, string name)
+        public FakeCharacters(GamePlayer player, string name)
         {
-            base.Name = name;
+            Name = name;
             AccountName = "fake_" + name.ToLowerInvariant();
             Level = player.Level;
             Xpos = player.Position.X + Util.Random(-100, 100);

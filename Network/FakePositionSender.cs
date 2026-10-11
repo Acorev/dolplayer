@@ -12,7 +12,7 @@ using System.Reflection;
 using DOL.GS.PacketHandler;
 using log4net;
 
-namespace DOL.GS.Scripts.FakePlayers
+namespace DOL.GS.Scripts
 {
 	/// <summary>
 	/// Garde un faux joueur "vivant" et visible :

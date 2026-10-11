@@ -20,7 +20,7 @@ using DOL.GS.PacketHandler;
 using DOL.GS.Profession;
 using DOL.GS.Quests;
 
-namespace DOL.GS.Scripts.FakePlayers
+namespace DOL.GS.Scripts
 {
 	/// <summary>
 	/// Bibliothèque de paquets "muette" du faux client.
